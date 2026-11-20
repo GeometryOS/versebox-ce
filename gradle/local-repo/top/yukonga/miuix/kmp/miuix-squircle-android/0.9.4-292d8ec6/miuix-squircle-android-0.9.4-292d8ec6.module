@@ -1,0 +1,123 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "url": "../../miuix-squircle/0.9.4-292d8ec6/miuix-squircle-0.9.4-292d8ec6.module",
+    "group": "top.yukonga.miuix.kmp",
+    "module": "miuix-squircle",
+    "version": "0.9.4-292d8ec6",
+    "attributes": {
+      "org.gradle.status": "integration"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.8.1"
+    }
+  },
+  "variants": [
+    {
+      "name": "androidApiElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "android",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api",
+        "org.jetbrains.kotlin.platform.type": "androidJvm"
+      },
+      "dependencies": [
+        {
+          "group": "top.yukonga.miuix.kmp",
+          "module": "miuix-shader",
+          "version": {
+            "requires": "0.9.4-292d8ec6"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.4.21"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "miuix-squircle.aar",
+          "url": "miuix-squircle-android-0.9.4-292d8ec6.aar",
+          "size": 54305,
+          "sha512": "58e4cb96ff6bed1ac064f67f2fa6498914b77679eb1e1890814211e715bf07a29e157634df906f8f29bcea778c6a459827572b3f124fadea47102270250e1efd",
+          "sha256": "7e7004f03f43d6fc9009b90997ca0bb00d221dd129cafbbcba7e1e188e5fd279",
+          "sha1": "8220367e8308542b81bb67921ce606d64eae80bf",
+          "md5": "7c3b737aacb7e731e07404350f033d6c"
+        }
+      ]
+    },
+    {
+      "name": "androidRuntimeElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "android",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "androidJvm"
+      },
+      "dependencies": [
+        {
+          "group": "top.yukonga.miuix.kmp",
+          "module": "miuix-shader",
+          "version": {
+            "requires": "0.9.4-292d8ec6"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.4.21"
+          }
+        },
+        {
+          "group": "org.jetbrains.compose.foundation",
+          "module": "foundation",
+          "version": {
+            "requires": "1.12.2"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "miuix-squircle.aar",
+          "url": "miuix-squircle-android-0.9.4-292d8ec6.aar",
+          "size": 54305,
+          "sha512": "58e4cb96ff6bed1ac064f67f2fa6498914b77679eb1e1890814211e715bf07a29e157634df906f8f29bcea778c6a459827572b3f124fadea47102270250e1efd",
+          "sha256": "7e7004f03f43d6fc9009b90997ca0bb00d221dd129cafbbcba7e1e188e5fd279",
+          "sha1": "8220367e8308542b81bb67921ce606d64eae80bf",
+          "md5": "7c3b737aacb7e731e07404350f033d6c"
+        }
+      ]
+    },
+    {
+      "name": "androidSourcesElements-published",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.jvm.environment": "android",
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "androidJvm"
+      },
+      "files": [
+        {
+          "name": "miuix-squircle-android-0.9.4-292d8ec6-sources.jar",
+          "url": "miuix-squircle-android-0.9.4-292d8ec6-sources.jar",
+          "size": 37917,
+          "sha512": "3714216d3cf3b80541b41a3f68c63ee2a79dfb14b79b01298f10ae3c24389374ce144536ca961fcddd4341e8fb21a6e6a5a4a706432232b474a991a2f8bbde48",
+          "sha256": "7ba8633b5c4de8e9bc145522200722b82b9bcef53f4f5c0e264af2ab71d16a75",
+          "sha1": "045b00c7bf622c05c28a049c0d8a434840bf3d14",
+          "md5": "c06c58530d1061e04fbfdc7b9feed63f"
+        }
+      ]
+    }
+  ]
+}

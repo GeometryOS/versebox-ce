@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="GradleMigrationSettings" migrationVersion="1" />
+  <component name="GradleSettings">
+    <option name="linkedExternalProjectsSettings">
+      <GradleProjectSettings>
+        <option name="testRunner" value="CHOOSE_PER_TEST" />
+        <option name="externalProjectPath" value="$PROJECT_DIR$" />
+        <option name="gradleJvm" value="#GRADLE_LOCAL_JAVA_HOME" />
+        <option name="modules">
+          <set>
+            <option value="$PROJECT_DIR$" />
+            <option value="$PROJECT_DIR$/app" />
+            <option value="$PROJECT_DIR$/guest-runtime" />
+            <option value="$PROJECT_DIR$/guest-runtime-a15" />
+            <option value="$PROJECT_DIR$/guest-runtime-a9" />
+            <option value="$PROJECT_DIR$/log-audit" />
+            <option value="$PROJECT_DIR$/native-display" />
+            <option value="$PROJECT_DIR$/phantom-probe" />
+            <option value="$PROJECT_DIR$/vm-display" />
+            <option value="$PROJECT_DIR$/vm-rom" />
+          </set>
+        </option>
+      </GradleProjectSettings>
+    </option>
+  </component>
+</project>

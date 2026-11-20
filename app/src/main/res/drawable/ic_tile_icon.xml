@@ -1,0 +1,41 @@
+<!--
+  Tab 图标：安卓机器人 + 底部下划线。
+
+  与项目里其它 tab 图标同一套约定：
+  - 24dp / 24 viewport，尺寸别再改；
+  - 一律 #FFFFFFFF 绘制，颜色交给 Icon(tint = LocalContentColor) 与
+    NavigationBarItem / NavigationItem 的 selected·unselected 颜色，
+    这里禁止写死品牌色（绿色属于品牌标识，不属于 tab）。
+
+  尺寸校准：原始图形内容只占 x 3.5–20.5 / y 3–20.5（墨迹 17×17.5），
+  比同排 Material 图标（约 18–20dp 墨迹）偏小、且重心比视觉中线高 0.25dp。
+  这里用 group 以墨迹中心 (12, 11.75) 放大 1.1 倍再下移 0.25dp，
+  得到 18.7×19.25、正好居中的墨迹 —— 不改任何路径数据。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:height="24dp"
+    android:width="24dp"
+    android:viewportWidth="24.0"
+    android:viewportHeight="24.0">
+
+    <group
+        android:pivotX="12"
+        android:pivotY="11.75"
+        android:scaleX="1.1"
+        android:scaleY="1.1"
+        android:translateY="0.25">
+
+        <!-- 机器人头部：圆角矩形，两个眼睛用 evenOdd 挖空 -->
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M8.5,3 H15.5 A3.5,3.5 0 0 1 19,6.5 V12.5 A3.5,3.5 0 0 1 15.5,16 H8.5 A3.5,3.5 0 0 1 5,12.5 V6.5 A3.5,3.5 0 0 1 8.5,3 Z M8.5,7.5 H10.5 V9.5 H8.5 Z M13.5,7.5 H15.5 V9.5 H13.5 Z" />
+
+        <!-- 底部下划线：圆头描边 -->
+        <path
+            android:pathData="M4.5,19.5 L19.5,19.5"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeWidth="2.0"
+            android:strokeLineCap="round" />
+    </group>
+</vector>

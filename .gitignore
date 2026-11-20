@@ -1,0 +1,31 @@
+.gradle/
+**/build/
+local.properties
+.tools/
+artifacts/
+runtime-inputs/
+downloads/
+_audit/
+_docs/
+_bin/
+.backups/
+.kotlin/
+container-probe/
+.gradle-user/
+guest-runtime-a9/
+guest-runtime-a10/
+guest-runtime-a15/
+50000000
+app/src/main/jniLibs/
+python/
+
+# ROM 入库：本机覆盖配置（引用本地工作区的发布产物）与 Release 下载缓存都是本机产物，不入库。
+# 仓库默认配置是 app/rom-embed.json（按 GitHub Release 拉），那份**必须**入库。
+app/rom-embed.local.json
+_rom_cache/
+*.jks
+*.keystore
+__pycache__/
+.repo_memory/
+*.zip
+

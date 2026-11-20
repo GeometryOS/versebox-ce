@@ -1,0 +1,130 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "url": "../../miuix-preference/0.9.4-292d8ec6/miuix-preference-0.9.4-292d8ec6.module",
+    "group": "top.yukonga.miuix.kmp",
+    "module": "miuix-preference",
+    "version": "0.9.4-292d8ec6",
+    "attributes": {
+      "org.gradle.status": "integration"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.8.1"
+    }
+  },
+  "variants": [
+    {
+      "name": "androidApiElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "android",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api",
+        "org.jetbrains.kotlin.platform.type": "androidJvm"
+      },
+      "dependencies": [
+        {
+          "group": "top.yukonga.miuix.kmp",
+          "module": "miuix-ui",
+          "version": {
+            "requires": "0.9.4-292d8ec6"
+          }
+        },
+        {
+          "group": "org.jetbrains.compose.foundation",
+          "module": "foundation",
+          "version": {
+            "requires": "1.12.2"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.4.21"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "miuix-preference.aar",
+          "url": "miuix-preference-android-0.9.4-292d8ec6.aar",
+          "size": 245046,
+          "sha512": "45caf3737b045232364e395451d46fd4e1e3ed58c396f1ee222add17ae351afd256f33667da816e0d62efd4656766464e52db03c5e794b9b84413d88ac59a179",
+          "sha256": "eeda3ac1c2cc3f3f1ec4c75a16499781c4262ab0246da1bab59180819076b725",
+          "sha1": "598bd3c369e87d6b88bea94a5531546a3a13a897",
+          "md5": "e8a51bca8c85f897637f04aa1e9c6d7a"
+        }
+      ]
+    },
+    {
+      "name": "androidRuntimeElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "android",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "androidJvm"
+      },
+      "dependencies": [
+        {
+          "group": "top.yukonga.miuix.kmp",
+          "module": "miuix-ui",
+          "version": {
+            "requires": "0.9.4-292d8ec6"
+          }
+        },
+        {
+          "group": "org.jetbrains.compose.foundation",
+          "module": "foundation",
+          "version": {
+            "requires": "1.12.2"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.4.21"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "miuix-preference.aar",
+          "url": "miuix-preference-android-0.9.4-292d8ec6.aar",
+          "size": 245046,
+          "sha512": "45caf3737b045232364e395451d46fd4e1e3ed58c396f1ee222add17ae351afd256f33667da816e0d62efd4656766464e52db03c5e794b9b84413d88ac59a179",
+          "sha256": "eeda3ac1c2cc3f3f1ec4c75a16499781c4262ab0246da1bab59180819076b725",
+          "sha1": "598bd3c369e87d6b88bea94a5531546a3a13a897",
+          "md5": "e8a51bca8c85f897637f04aa1e9c6d7a"
+        }
+      ]
+    },
+    {
+      "name": "androidSourcesElements-published",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.jvm.environment": "android",
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "androidJvm"
+      },
+      "files": [
+        {
+          "name": "miuix-preference-android-0.9.4-292d8ec6-sources.jar",
+          "url": "miuix-preference-android-0.9.4-292d8ec6-sources.jar",
+          "size": 35642,
+          "sha512": "924b15e17e764e9ef000293f5fb1b20aae4c2309f007f12567f6e09093a74d7f5154f3eac8f1f0268e211e415c9f5950babb681c0a2a07e5a4ad49cf2a54b25f",
+          "sha256": "0589cad1a5784191c34faa4617c4d9aaf4dc0ab69a2316ee4fa72ec10bd3a3c0",
+          "sha1": "1fe654de4c451ccd1917805ed902b1b1473a32b7",
+          "md5": "c9891ce7560942b03309acb359dfd77d"
+        }
+      ]
+    }
+  ]
+}

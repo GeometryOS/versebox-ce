@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  应用图标（自适应）：白底 + 主页 tab 的字形（品牌色）。
+
+  前景/单色层都在 drawable/ 里，几何来源注释写在那两个文件里；
+  这里只声明三层，不写任何尺寸（尺寸由系统按 108dp 画布与 72dp 安全区决定）。
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_foreground_monochrome" />
+</adaptive-icon>

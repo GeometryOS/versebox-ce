@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自适应图标的前景层：与主页 tab 完全是同一个字形（ic_tile_icon），只做两件事——
+  换颜色、按 108dp 画布重新居中放大。
+
+  几何来源（不要改路径数据）：ic_tile_icon 的墨迹在 24 viewport 里是 x 3.5–20.5 / y 3–20.5，
+  中心 (12, 11.75)，它的内层 group 以 (12, 11.75) 放大 1.1 再下移 0.25 → 墨迹中心正好 (12, 12)、
+  高 19.25。外层再放大 2.3 倍（墨迹 ≈ 44×43dp）并以 pivot (12,12) 平移到 108 画布中心
+  （translate = 54 - 12 = 42）。
+
+  为什么是 2.3 而不是更大：启动器保证可见的是 72dp 方形 / 66dp 圆形安全区；
+  墨迹对角线 = √(44²+43²) ≈ 61.8dp < 66dp，圆角裁切不会切到字形。再放大就会切到下划线两端。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <group
+        android:pivotX="12"
+        android:pivotY="12"
+        android:scaleX="2.3"
+        android:scaleY="2.3"
+        android:translateX="42"
+        android:translateY="42">
+
+        <!-- 与 ic_tile_icon 相同的内层校准：以墨迹中心放大 1.1、下移 0.25 -->
+        <group
+            android:pivotX="12"
+            android:pivotY="11.75"
+            android:scaleX="1.1"
+            android:scaleY="1.1"
+            android:translateY="0.25">
+
+            <!-- 机器人头部：圆角矩形，两个眼睛用 evenOdd 挖空 -->
+            <path
+                android:fillColor="@color/ic_launcher_glyph"
+                android:fillType="evenOdd"
+                android:pathData="M8.5,3 H15.5 A3.5,3.5 0 0 1 19,6.5 V12.5 A3.5,3.5 0 0 1 15.5,16 H8.5 A3.5,3.5 0 0 1 5,12.5 V6.5 A3.5,3.5 0 0 1 8.5,3 Z M8.5,7.5 H10.5 V9.5 H8.5 Z M13.5,7.5 H15.5 V9.5 H13.5 Z" />
+
+            <!-- 底部下划线：圆头描边 -->
+            <path
+                android:pathData="M4.5,19.5 L19.5,19.5"
+                android:strokeColor="@color/ic_launcher_glyph"
+                android:strokeLineCap="round"
+                android:strokeWidth="2.0" />
+        </group>
+    </group>
+</vector>

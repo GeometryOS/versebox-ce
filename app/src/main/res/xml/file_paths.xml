@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 记录导出/分享用到的路径。只暴露这三处，不把整个私有目录交出去。 -->
+<paths>
+    <external-files-path name="records" path="records/" />
+    <downloads-path name="downloads" path="VerseBox/records/" />
+    <cache-path name="export" path="export/" />
+    <!-- 第一屏「分享日志快照」：只暴露 cache/snapshots 这一个目录（09/03 §3）。 -->
+    <cache-path name="snapshots" path="snapshots/" />
+</paths>

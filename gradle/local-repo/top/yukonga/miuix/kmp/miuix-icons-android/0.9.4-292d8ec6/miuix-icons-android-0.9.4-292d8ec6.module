@@ -1,0 +1,123 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "url": "../../miuix-icons/0.9.4-292d8ec6/miuix-icons-0.9.4-292d8ec6.module",
+    "group": "top.yukonga.miuix.kmp",
+    "module": "miuix-icons",
+    "version": "0.9.4-292d8ec6",
+    "attributes": {
+      "org.gradle.status": "integration"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.8.1"
+    }
+  },
+  "variants": [
+    {
+      "name": "androidApiElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "android",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api",
+        "org.jetbrains.kotlin.platform.type": "androidJvm"
+      },
+      "dependencies": [
+        {
+          "group": "top.yukonga.miuix.kmp",
+          "module": "miuix-core",
+          "version": {
+            "requires": "0.9.4-292d8ec6"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.4.21"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "miuix-icons.aar",
+          "url": "miuix-icons-android-0.9.4-292d8ec6.aar",
+          "size": 1878935,
+          "sha512": "3cfed9ed25b9e82439488b80fcebcfa9bf5cfdd0c0c35404cec27252e613b9358dbb3e99569f430810cc9b63d9138e0d19e9bdd2f208e7b5e57297a8ee8f9b07",
+          "sha256": "2cb7f0d59231e30ab1b079af97ad1245fc542d25c7c8d66dbc812e3cfa8d79d6",
+          "sha1": "67f35f59015263617c72b6fa3dda5b8b065748d9",
+          "md5": "a5f3c3a6f70c1a001f6a8455841f7c28"
+        }
+      ]
+    },
+    {
+      "name": "androidRuntimeElements-published",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.jvm.environment": "android",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "androidJvm"
+      },
+      "dependencies": [
+        {
+          "group": "top.yukonga.miuix.kmp",
+          "module": "miuix-core",
+          "version": {
+            "requires": "0.9.4-292d8ec6"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.4.21"
+          }
+        },
+        {
+          "group": "org.jetbrains.compose.foundation",
+          "module": "foundation",
+          "version": {
+            "requires": "1.12.2"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "miuix-icons.aar",
+          "url": "miuix-icons-android-0.9.4-292d8ec6.aar",
+          "size": 1878935,
+          "sha512": "3cfed9ed25b9e82439488b80fcebcfa9bf5cfdd0c0c35404cec27252e613b9358dbb3e99569f430810cc9b63d9138e0d19e9bdd2f208e7b5e57297a8ee8f9b07",
+          "sha256": "2cb7f0d59231e30ab1b079af97ad1245fc542d25c7c8d66dbc812e3cfa8d79d6",
+          "sha1": "67f35f59015263617c72b6fa3dda5b8b065748d9",
+          "md5": "a5f3c3a6f70c1a001f6a8455841f7c28"
+        }
+      ]
+    },
+    {
+      "name": "androidSourcesElements-published",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.jvm.environment": "android",
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "androidJvm"
+      },
+      "files": [
+        {
+          "name": "miuix-icons-android-0.9.4-292d8ec6-sources.jar",
+          "url": "miuix-icons-android-0.9.4-292d8ec6-sources.jar",
+          "size": 742050,
+          "sha512": "161ab1262e9c85879b851f4fdfed792f28a60f8f5b2723eb75046097b3ca95f1c0ee79f1fc9967005ae7c725f635b592b8b47b24c6b815c0fff4c261cfa453fa",
+          "sha256": "8387a980fb1791191f25f7c0aafe829846cc431343cbd88615161c73e5539b53",
+          "sha1": "24d126616dd43e771da490072db048f8fe4677ca",
+          "md5": "4b562e7c98921181c6c60cc70ebf016f"
+        }
+      ]
+    }
+  ]
+}

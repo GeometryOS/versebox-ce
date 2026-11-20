@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  关于页大图标的单色（mask）版本：只有显示器字形，没有底色方块。
+
+  为什么需要它：关于页顶部那条 88dp 的图标位里，带底色的启动图标会按 requiredSize(160.dp)
+  放大绘制（为了配合模糊/混合），超出的部分会把下面的应用名与版本号盖住。
+  单色版只有字形、四周透明，放大后不会遮住任何文字。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M10,9H38V35H26V39H33V42H15V39H22V35H10Z M16,17H20V28H17V20H16ZM24,17H31V28H24ZM27,20V25H28V20Z" />
+</vector>

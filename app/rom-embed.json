@@ -1,0 +1,27 @@
+{
+  "schema": "versebox-rom-embed/1",
+  "assetDir": "kanadex-rom",
+  "notes": [
+    "这个文件决定「这次打出来的 APK 里内置了哪些 ROM」。它按**文件**计，不按安卓版本计：",
+    "每一条 source 只是「一个 ROM 的发布产物在哪」，不许出现 a15Url / apiLevel 之类的字段。",
+    "两种来源可以混用、可以自由组合：",
+    "  release  : GitHub 仓库的 Release（会拉 versebox-*.zip 与 apk-resident-libs-*.tar）",
+    "  localDir : 本地的发布产物目录（绝对路径，或相对仓库根目录的路径）",
+    "拉取失败或目录不存在 = 跳过这一条并在构建日志里说明；没有 ROM 也是合法构建。",
+    "旧格式（legacyPreparedApk）默认不入库，理由与打开条件见 docs/rom-package/15-入库配置.md §5。"
+  ],
+  "sources": [
+    {
+      "name": "a15",
+      "release": "https://github.com/GeometryOS/VerseBox-guest-runtime-a15"
+    },
+    {
+      "name": "a10",
+      "release": "https://github.com/GeometryOS/VerseBox-guest-runtime-a10"
+    },
+    {
+      "name": "a9",
+      "release": "https://github.com/GeometryOS/VerseBox-guest-runtime-a9"
+    }
+  ]
+}

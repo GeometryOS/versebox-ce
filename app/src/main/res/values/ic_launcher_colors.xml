@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  启动图标（自适应图标）的两个颜色值。
+
+  - background：白色底。启动器把前景按 72/108 的安全区裁切，底色只负责"不透明"。
+  - glyph：前景字形的颜色。与主页 tab 图标是同一个字形（ic_tile_icon），
+    这里只是给它一个品牌色；tab 里仍然用 tint 跟随主题，不读这个值。
+-->
+<resources>
+    <color name="ic_launcher_background">#FFFFFFFF</color>
+    <color name="ic_launcher_glyph">#FF4D6BFE</color>
+</resources>

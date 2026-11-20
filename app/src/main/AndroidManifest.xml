@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Import also includes installed packages without a launcher activity. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <!-- Guest WLAN list: Android 13+ returns no scan results without location
+         unless neverForLocation is declared. That is the state that produced
+         a15_wifiscanner_deliver=0 and an empty WLAN list on 2201123C
+         (2026-11-08), while PKX110 had a location grant and worked. -->
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-feature android:name="android.hardware.wifi" android:required="false" />
+    <!--
+        miuix-blur 的 AAR 清单声明 minSdk 33，但它的模糊能力只在我们显式调用且
+        Android 13+ 时才生效：所有调用点都在 isRenderEffectSupported() / SDK_INT>=33
+        之后，低版本上根本走不到那段代码。
+        与 InstallerX-Revived（minSdk 26）用的是同一条处置方式：overrideLibrary + 运行时自守。
+    -->
+    <uses-sdk tools:overrideLibrary="top.yukonga.miuix.kmp.blur" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-feature android:glEsVersion="0x00020000" android:required="false" />
+
+    <application
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@style/AppTheme"
+        android:supportsRtl="true"
+        android:enableOnBackInvokedCallback="true">
+        <!-- 主窗口：singleTask，从启动页/通知回来的都是同一个窗口（不重开、不顶掉虚拟机窗口）。 -->
+        <activity
+            android:name="io.a10vm.ui.MainActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize" />
+        <!-- 桌面入口做成 alias：设置里的「隐藏桌面图标」只关它，不影响应用本身能否被拉起。 -->
+        <activity-alias
+            android:name="io.a10vm.ui.Launcher"
+            android:enabled="true"
+            android:exported="true"
+            android:targetActivity="io.a10vm.ui.MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity
+            android:name="io.a10vm.ui.FullscreenActivity"
+            android:exported="false" />
+        <!-- 记录导出/分享：只授予单个 zip 的读权限，不暴露私有目录。 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+        <service
+            android:name="io.a10vm.runtime.VmService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse|microphone|camera">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-started native Android guest graphics and touch session" />
+        </service>
+            
+        
+        
+        
+            <receiver android:name="io.a10vm.runtime.limits.PhantomProbeReceiver"
+                  android:process=":probe" android:exported="false" />
+            <service android:name="io.a10vm.runtime.limits.PhantomProbeService"
+                 android:process=":phantom" android:exported="false" />
+    </application>
+</manifest>

@@ -1,0 +1,19 @@
+# ！！！旧格式兼容描述（versebox-rom/1），**已停止演进** ！！！
+#
+# 这个文件只服务「APK 的 assets 里直接带 rootfs」这条旧路径（RomCatalog 用它列出旧格式 ROM）。
+# 新格式 ROM 包的「身份」在运行时仓库：guest-runtime-a15/rom/rom.properties.yaml，
+# 由 rom/pack-rom.py 生成 zip 根里的 versebox_properties.yaml。
+# 不要在这里加字段、也不要让打包脚本读它。阶段 7 收敛时整个 assets/roms/ 会被删除。
+# Android 9 客体的描述文件。
+# guest-runtime-a9 只提供 assets/jniLibs 产物；运行期 Java 启动层仍在
+# guest-runtime 模块里，由 assets/guest-runtime-a9-inputs.json 的
+# runtimeProfile（bootEntry=A9Boot、checkClass=A9DesktopCheck）选择。
+schema: versebox-rom/1
+id: android9
+name: Android 9
+androidVersion: "9"
+apiLevel: 28
+assetPrefix: guest-runtime-a9/
+runtimeManifest: guest-runtime-a9-inputs.json
+displayManifest: native-display-inputs.json
+description: 独立 API 28 用户空间（Redroid 9 + AOSP 9 自建运行时）
