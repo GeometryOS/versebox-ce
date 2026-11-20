@@ -14,26 +14,20 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
-    // 开放源代码许可页：与 InstallerX 同一套插件（生成 app 模块的库清单）
+    // 开放源代码许可页
     alias(libs.plugins.aboutlibraries)
 }
 
 val miuiTrial = providers.gradleProperty("guestRuntimeProfile").orNull == "miui12"
-
-// miuix 版本：与 InstallerX 对齐用 SNAPSHOT（需 GitHub Packages 凭据），
-// 没有凭据时回落到 Maven Central 的正式版，保证任何人都能构建。
 val gprUser: String? = (findProperty("gpr.user") as String?) ?: System.getenv("GITHUB_ACTOR")
 val gprKey: String? = (findProperty("gpr.key") as String?) ?: System.getenv("GITHUB_TOKEN")
-// 默认用 libs.versions.toml 里的正式版（任何人、离线都能构建）。
-// 要跟 InstallerX 的 SNAPSHOT 对齐时显式传：-PmiuixVersion=0.9.4-<commit>-SNAPSHOT（需 GitHub Packages 凭据）。
 val miuixVersion: String = (findProperty("miuixVersion") as String?)
     ?: libs.versions.miuix.get()
 
 android {
     namespace = "me.kanadex.versebox"
 
-    // 版本矩阵见 docs/ui-rework/01-构建基座/01-版本矩阵.md：
-    // Miuix 0.9.4 / Compose 1.12 / material3 1.5 的 AAR 元数据要求 compileSdk >= 37 且 AGP >= 9.1。
+
     compileSdk = libs.versions.compileSdk.get().toInt()
     compileSdkMinor = libs.versions.compileSdkMinor.get().toInt()
 
@@ -41,8 +35,7 @@ android {
         applicationId = if (miuiTrial) "io.a10vm.miui" else "me.kanadex.versebox"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        // 101 / 0.1.1-romlib：客体 .so 不再进 APK 的 lib/（旧格式在 assets 的 payload，
-        // 新格式在 ROM 的 payload/lib）。装机后用它区分"哪一版已经把 lib 搬走"。
+        // 新格式在 ROM 的 payload/lib）
         versionCode = if (miuiTrial) 98 else 105
         versionName = if (miuiTrial) "0.2.88-miui12-android9-aosp-ime" else "0.1.5-romlib-bootlog"
         resValue("string", "app_name", if (miuiTrial) "A10VM MIUI12" else "Versebox")
@@ -50,22 +43,18 @@ android {
     }
 
     compileOptions {
-        // miuix-nav / miuix 0.9.4 的字节码是 JVM target 21（其内联函数会被我们内联），
-        // 17 会直接编译失败，所以应用模块对齐到 21（本机 JDK 21，AGP 9 支持）。
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
     }
 
     buildFeatures {
         compose = true
-        // about 页要显示 versionName/versionCode（InstallerX 同样打开）
         buildConfig = true
-        // AGP 9 起 resValue 受 buildFeatures.resValues 控制，app_name 依赖它。
         resValues = true
     }
 
     packaging {
-        // 客体运行库要按原文件名解压到 nativeLibraryDir，不能改名或剥离。
+        // 客体运行库要按原文件名解压到 nativeLibraryDir
         jniLibs.useLegacyPackaging = true
         jniLibs.keepDebugSymbols += "**/*.so"
         jniLibs.excludes += "**/liba10vm-p1-window.so"
@@ -79,24 +68,6 @@ android {
     // 这里不再指向任何手工暂存目录。
 }
 
-/*
- * miuix 与 material-kolor 共用 com.materialkolor:material-color-utilities 这一根轴，
- * 5.x / 6.x 之间把 DynamicScheme 搬过一次家，钉错哪一边都会「能编过就启动崩」：
- *
- *   utilities 5.0.1：DynamicScheme 在 com.materialkolor.scheme
- *                     ColorSpec.SpecVersion 只有 SPEC_2021 / SPEC_2025（没有 SPEC_2026）
- *   utilities 6.0.0：DynamicScheme 在 com.materialkolor.dynamiccolor，多出 ColorSpec2026 / SchemeCmf
- *
- * material-kolor-material3:6.0.0 的 DynamicColorSchemeKt 要 dynamiccolor.DynamicScheme$Platform，
- * 所以把 utilities force 回 5.0.1 不是兜底，而是直接给 material-kolor 送 NoClassDefFoundError
- * （真机日志：ThemeExt.kt:46 <- VerseBoxTheme.kt:133，第一次 composition 就 FATAL）。
- * 主题代码还用到 Cmf 调色板与 Spec 2026，而这两样在 Central 的 0.9.4 正式版里根本不存在。
- *
- * 结论：miuix 必须是编在 utilities 6.0.0 上的那一版（0.9.4-<commit>-SNAPSHOT，与 InstallerX 一致）。
- * 拿到正式版时这里直接失败并说清原因，而不是 force 出一个能装、一开就崩的包。
- */
-// 0.9.4-292d8ec6 是 gradle/local-repo 里的静态副本（把快照坐标钉成了固定版本号）；
-// 其余 `*-SNAPSHOT` 走远程 GitHub Packages；Maven Central 的正式版一律拒绝（理由见上）。
 val miuixFromLocalRepo = miuixVersion == "0.9.4-292d8ec6"
 if (!miuixVersion.endsWith("-SNAPSHOT") && !miuixFromLocalRepo) {
     throw GradleException(
@@ -125,22 +96,14 @@ aboutLibraries {
 
 dependencies {
     implementation(project(":native-display"))
-    // A10 的**Java 运行层**（RuntimeFiles 等）在这里；它的 assets / jniLibs **不再**由模块注入，
-    // 一律走 rom-embed 配置（见下面的 ROM 入库段）。理由：ROM 与 app 必须解耦，
-    // "哪几个 so 进 lib/、哪几个包进 assets/" 只允许有一个来源 —— 配置文件 + 构建链。
-    //
-    // 曾经为了方便直接 implementation(project(":guest-runtime-a15")) / (-a9)，
-    // 结果是：① APK 里根本没有 A15/A9 的 resident .so（那两个模块不是依赖，注入不到）；
-    // ② 一旦加上依赖，旧格式 payload 又整份被带进来，体积直接翻倍。
     implementation(project(":guest-runtime"))
-    // Android 12+ phantom process 限制检测用的 fork/waitpid 原语（纯 native）。
+    // Android 12+ phantom process 限制检测用
     implementation(project(":phantom-probe"))
-    // 日志审计策略库（纯 JVM，无 android.*）：AppState / VmService / RecordCollector 都只是它的调用方
+    // 日志审计策略库
     implementation(project(":log-audit"))
-    // 显示设置策略库（纯 JVM，无 android.*/Compose）：分辨率预设、真机几何换算、重启判据与文案
+    // 显示设置策略库
     implementation(project(":vm-display"))
-    // ROM 契约与版本管理策略库（纯 JVM，无 android.*/Compose/第三方库）：
-    // romKey 解析、自述 L1 校验、规范化 payload 哈希、解包流水线、版本决策与全部文案
+    // ROM 契约与版本管理策略库
     implementation(project(":vm-rom"))
 
     implementation(libs.androidx.core.ktx)
@@ -149,8 +112,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.kotlinx.coroutines.android)
 
-    // Compose：全部显式版本（不再引入 compose-bom：版本集中写在 libs.versions.toml 里，
-    // 少一个 platform 工件、也少一次"BOM 悄悄抬高某库版本"的意外）。
+    // Compose：全部显式版本
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.graphics)
     implementation(libs.compose.foundation)
@@ -159,7 +121,7 @@ dependencies {
     implementation(libs.compose.ui.tooling.preview)
     debugImplementation(libs.compose.ui.tooling)
 
-    // MIUI 风格组件库（与 InstallerX-Revived 同版本）
+    // MIUI 风格组件库
     implementation("top.yukonga.miuix.kmp:miuix-core-android:$miuixVersion")
     implementation("top.yukonga.miuix.kmp:miuix-ui-android:$miuixVersion")
     implementation("top.yukonga.miuix.kmp:miuix-preference-android:$miuixVersion")
@@ -168,10 +130,10 @@ dependencies {
     implementation("top.yukonga.miuix.kmp:miuix-shader-android:$miuixVersion")
     implementation("top.yukonga.miuix.kmp:miuix-nav-android:$miuixVersion")
 
-    // 主题换色：Material 3 动态配色 / 调色板风格
+    // 主题换色
     implementation(libs.material.kolor)
 
-    // 路由返回栈的 JSON 序列化 + NavigationBackHandler（miuix-nav 的返回手势依赖它）
+    // 路由返回栈的 JSON 序列化
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.androidx.lifecycle.viewmodel.navigation3)
 
@@ -181,60 +143,15 @@ dependencies {
 }
 
 
-/*
- * ------------------------------------------------------- ROM 入库（docs/rom-release/）
- *
- * 唯一入口是**一个配置文件**：默认 app/rom-embed.json（按 GitHub Release 拉）；
- * 本机存在 app/rom-embed.local.json 时优先用它（.gitignore 已排除）；
- * 也可以用 -PverseboxRomEmbed=<file> 显式指定。
- *
- * 它按**文件**计，不按安卓版本计：每一条 source 只是「一个 ROM 的发布产物在哪」，
- * 里面不许出现 a15Url / apiLevel / androidVersion 之类按版本命名的字段。理由写在
- * docs/rom-release/01：ROM 是对象，版本是它的属性；将来出现自定义 UI 的 ROM（任意 id）
- * 也走同一条链，不需要改这里一行代码。
- *
- * 每个 source 三种来源，可混用：
- *   "release": "https://github.com/<owner>/<repo>"   → 拉最近一次 Release 的产物
- *   "dir":     "guest-runtime-a15/dist"               → 本地发布产物目录（相对仓库根或绝对路径）
- *   "zip":     "some/where/versebox-x-y.zip"          → 单个包（调试用）
- * 拉到的原始文件进 <工作区>/_rom_cache/<name>/download，处理过的那一份进 .../build；
- * 本地目录引用**不复制**（同卷硬链接），不会在 C:/D: 上多出第二份 GB 级副本。
- *
- * 每个 source 的 mode 决定「哪一份包进 APK」：
- *   full     默认。完整 ROM 包（payload 齐全）
- *   minimal  只带**最小占位包**：根目录只有 versebox_properties.yaml 且 placeholder: true。
- *            列表里看得到这一版，但要用户自己导入完整包才能用（docs/rom-release/02 §3）
- *   libs     一个包都不进 APK，只把「必须留在 APK lib/ 的 .so」带上
- *
- * 构建期产出统一落在 app/build/rom-dist/（docs/rom-release/02 §2）：
- *   roms/                   这次要打进 APK 的 ROM 包（硬链接，不复制）
- *   min/                    每个 ROM 的最小占位包（总是生成，可以单独发出去）
- *   apk-libs/arm64-v8a/     必须进 APK lib/ 的 .so（从 ROM 清单 resident=true 抽出来的）
- *   apk-libs-<source>.tar   上面那一份的 tar 产物（发布用；构建链的第二个产物）
- *   index.json              运行期索引（同时放进 assets/<assetDir>/index.json）
- *   rom-embed.sample.json   配置文件示例（每次构建生成，永远和本段代码同步）
- *
- * 失败语义（与 docs/rom-package/06 §2.3 的 T1/T2/T3 一致）：
- *   - 没有配置文件 / 配置里没有可用 source → 零内置 ROM，**构建照常成功**（T1）；
- *   - 某个 source 拉取失败或目录不存在 → 跳过并打印原因（不算失败）；
- *   - 有 zip 但不是合法 ROM 包 → -PverseboxRomStrict=true（默认）构建失败（T3）。
- */
 
-/** 配置里的一条 source。字段刻意与"安卓版本"无关（见本节标题下的红线）。 */
 data class RomEmbedSource(
     val name: String,
     val release: String?,
     val dir: String?,
     val zip: String?,
     val only: List<String>,
-    /** full / minimal / libs —— 见本节标题。 */
     val mode: String,
-    /**
-     * **只给旧包用的回退**：这份 ROM 的清单里没有 `resident: true`（2026-11-11 之前打的包），
-     * 那就从这里的目录补「必须进 APK 的 .so」。新包不需要写它（见 docs/rom-release/01 §3.2）。
-     */
     val residentLibs: String?,
-    /** 旧格式（prepared-apk）：登记了但本轮不自动入库，见 docs/rom-release/03。 */
     val legacyPreparedApk: String?,
 )
 
@@ -249,24 +166,20 @@ val romEmbedConfigFile: File = run {
 }
 
 val romEmbedAssetDir = "kanadex-rom"
-
-// AGP 的 assets srcDir 语义是「这个目录的内容就是 assets 根」——所以注册**父目录**、
-// 把 zip 放进 <父目录>/kanadex-rom/，否则包里的路径会变成 assets/versebox-*.zip，
-// 运行期按 assets/kanadex-rom/ 去找就一条都看不见（真机踩过）。
 val romDistDir = layout.buildDirectory.dir("rom-dist").get().asFile
 val romDistRoms = File(romDistDir, "roms")
 val romDistMin = File(romDistDir, "min")
 val romDistLibs = File(romDistDir, "apk-libs/arm64-v8a")
 val romAssetsRoot = layout.buildDirectory.dir("generated/rom-assets").get().asFile
 val romEmbedStagingDir = File(romAssetsRoot, romEmbedAssetDir)
-// APK 的 lib/：**唯一**来源就是这里（含 arm64-v8a/ 子目录），由配置里的 resident tar / ROM 清单填。
+// APK 的 lib/
 val romDistJniRoot = File(romDistDir, "apk-libs")
 // 旧格式（prepared-apk）如果被登记，它的 assets 在这里暂存；默认不产生任何文件。
 val romLegacyAssetsRoot = layout.buildDirectory.dir("generated/rom-legacy-assets").get().asFile
 val romEmbedCacheDir = rootProject.layout.projectDirectory.dir("_rom_cache").asFile
 val romAssetsStrict = (findProperty("verseboxRomStrict") as String?)?.toBoolean() ?: true
 
-/** 配置示例：构建时生成，永远和上面的解析代码同步（docs/rom-release/01 §5）。 */
+/** 配置示例：构建时生成 */
 val romEmbedSample = """
 {
   "schema": "versebox-rom-embed/2",
@@ -288,7 +201,7 @@ val romEmbedSample = """
 }
 """.trimIndent() + "\n"
 
-/** 读配置；文件不存在或不是合法 JSON 就是「零内置 ROM」，不是构建失败。 */
+/** 读配置。 */
 fun readRomEmbedSources(): List<RomEmbedSource> {
     if (!romEmbedConfigFile.isFile) {
         val sample = File(romDistDir, "rom-embed.sample.json")
@@ -329,7 +242,6 @@ fun readRomEmbedSources(): List<RomEmbedSource> {
     }
 }
 
-/** 一个 source 解析出来的「发布产物目录」。 */
 fun resolveRomSourceDir(source: RomEmbedSource): File? {
     source.zip?.let { raw ->
         val file = if (File(raw).isAbsolute) File(raw) else rootProject.file(raw)
@@ -968,9 +880,9 @@ val verifyRomAssets = tasks.register("verifyRomAssets") {
 }
 
 android.sourceSets.getByName("main").assets.directories.add(romAssetsRoot.absolutePath)
-// 旧格式（如果配置里登记了）的 assets 暂存目录；没登记时目录不存在，AGP 会忽略。
+// 旧格式（如果配置里登记了）的 assets 暂存目录；没登记时目录不存在，AGP 会忽略
 android.sourceSets.getByName("main").assets.directories.add(romLegacyAssetsRoot.absolutePath)
-// APK 的 lib/：唯一来源是 rom-dist/apk-libs（resident tar / ROM 清单 / 旧格式 jniLibs 都汇到这里）。
+// APK 的 lib/：唯一来源是 rom-dist/apk-libs（resident tar / ROM 清单 / 旧格式 jniLibs 都汇到这里）
 android.sourceSets.getByName("main").jniLibs.directories.add(romDistJniRoot.absolutePath)
 
 tasks.named("preBuild") { dependsOn(verifyRomAssets) }
