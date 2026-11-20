@@ -47,11 +47,20 @@ fun sha256(file: File): String {
 // 干净检出（既没有 prepared-apk 也没有旧的 runtime-inputs）时才回落到参考 APK 解包，
 // 保持「裸 gradlew assembleDebug 也能出 A10」的老体验；正常开发有 prepared-apk 时不跑它。
 val needLegacyBootstrap = preparedRoot == null && !a10Root.isDirectory && !legacyRoot.isDirectory
+// ciSkipNativeVerify 是「只编代码、不要客体运行库」的逃生口。它必须把 bootstrap 依赖也一起关掉：
+// 否则干净检出（_bin/A10VM.apk 不在仓库里）时 bootstrapBundledRuntime 会先抛异常，开关形同虚设。
+val skipNativeVerify = providers.gradleProperty("ciSkipNativeVerify").isPresent
 
 val verifyRuntime = tasks.register("verifyRuntime") {
-    if (needLegacyBootstrap) dependsOn(rootProject.tasks.named("bootstrapBundledRuntime"))
+    if (needLegacyBootstrap && !skipNativeVerify) dependsOn(rootProject.tasks.named("bootstrapBundledRuntime"))
     doLast {
-        if (providers.gradleProperty("ciSkipNativeVerify").isPresent) return@doLast
+        if (skipNativeVerify) {
+            logger.lifecycle(
+                "guest-runtime: 已跳过 A10 运行库校验（-PciSkipNativeVerify=true）。" +
+                    "打出来的 APK **不含**客体运行库，只能用于看 UI / 编代码。",
+            )
+            return@doLast
+        }
         val manifest = runtimeRoot.resolve("assets/guest-runtime-inputs.json")
         check(manifest.isFile) {
             "缺少 Android 10 ROM 运行库输入：$manifest\n" +

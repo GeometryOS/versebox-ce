@@ -740,7 +740,9 @@ fun writeMinimalRom(full: File, target: File): Boolean {
 val stageRomAssets = tasks.register("stageRomAssets") {
     group = "build"
     description = "按 rom-embed 配置把 ROM 包 / 最小占位包 / APK 必备 .so staging 到 build/rom-dist"
-    inputs.file(romEmbedConfigFile)
+    // 没有配置文件是**合法状态**（零内置 ROM，见本节 T1 语义）。Gradle 对 inputs.file()
+    // 的 optional() 仍会做存在性校验，所以这里干脆只在文件存在时声明输入。
+    if (romEmbedConfigFile.isFile) inputs.file(romEmbedConfigFile)
     outputs.dir(romDistDir)
     outputs.dir(romAssetsRoot)
     outputs.upToDateWhen { false }

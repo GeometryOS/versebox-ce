@@ -64,7 +64,14 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "VerseBox-CE"
-include(":app", ":native-display", ":guest-runtime", ":guest-runtime-a9", ":guest-runtime-a15", ":phantom-probe")
+include(":app", ":native-display", ":guest-runtime", ":phantom-probe")
+// guest-runtime-a9 / -a15 是**同一工作区的兄弟仓库**（各有自己的 .git 与 GB 级 ROM 产物），
+// 不属于本仓库、也被 .gitignore 排除。干净检出时它们不存在，无条件 include 会让 Gradle 直接失败：
+//   "Configuring project ':guest-runtime-a9' without an existing directory is not allowed"
+// 所以按目录存在与否决定是否纳入（app 不依赖它们，只有本地做 ROM 发布时才需要）。
+listOf(":guest-runtime-a9", ":guest-runtime-a15").forEach { path ->
+    if (file(path.removePrefix(":")).isDirectory) include(path)
+}
 // 日志审计策略库：纯 Kotlin/JVM，不依赖 Android（见 docs/log-audit/04-代码结构与解耦.md）。
 include(":log-audit")
 // 虚拟机显示类设置的策略库：纯 Kotlin/JVM，不依赖 Android/Compose（见 docs/display-settings/03）。

@@ -44,11 +44,23 @@ val bootstrapBundledRuntime = tasks.register("bootstrapBundledRuntime") {
     outputs.upToDateWhen { false }
     doLast {
         if (!apk.isFile) {
+            // 干净检出（_bin/ 不入库）+ -PciSkipNativeVerify=true：这是「只编代码」的合法组合，
+            // 不能硬失败，否则逃生口被 native-display / guest-runtime 的 dependsOn 绕过。
+            if (providers.gradleProperty("ciSkipNativeVerify").isPresent) {
+                logger.lifecycle(
+                    "bootstrapBundledRuntime: 已跳过（-PciSkipNativeVerify=true，且没有参考 APK " +
+                        "${apk.absolutePath}）。runtime-inputs 不会被生成。",
+                )
+                return@doLast
+            }
             throw GradleException(
                 "缺少参考 APK：${apk.absolutePath}\n" +
-                    "该 APK 只用来提供已审计的 ROM 运行库输入。请把它放回 _bin/A10VM.apk，" +
-                    "或用 -PbaseApk=/path/to/A10VM.apk 指定；完整 ROM 构建流程见 " +
-                    "docs/zh-CN/04-从零构建与移植教程.md。"
+                    "该 APK 只用来提供已审计的 ROM 运行库输入。三条路，任选一条：\n" +
+                    "  1) 把参考 APK 放回 _bin/A10VM.apk（本机已有，文件名见 README）；\n" +
+                    "  2) 用 -PbaseApk=/path/to/A10VM.apk 指定一个外部路径；\n" +
+                    "  3) 用 -PguestRuntimePrepared=<prepared-apk 目录> 直接给已解包的运行库；\n" +
+                    "  只想编代码 / 看 UI、不需要能跑 A10 时，加 -PciSkipNativeVerify=true 跳过本步。\n" +
+                    "完整 ROM 构建流程见 docs/zh-CN/04-从零构建与移植教程.md。"
             )
         }
         val stamp = "{\"layout\":" + bootstrapLayout + ",\"apk\":\"" +
