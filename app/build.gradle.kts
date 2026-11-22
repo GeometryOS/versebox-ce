@@ -294,6 +294,15 @@ fun httpText(url: String): String {
     System.getenv("GITHUB_TOKEN")?.takeIf { it.isNotBlank() }?.let {
         connection.setRequestProperty("Authorization", "Bearer " + it)
     }
+    val code = connection.responseCode
+    if (code == 403) {
+        throw GradleException(
+            "GitHub API 返回 403（通常是未认证限流）。请为构建提供 GITHUB_TOKEN 后重试：" + url,
+        )
+    }
+    if (code !in 200..299) {
+        throw GradleException("GitHub API 返回 " + code + "：" + url)
+    }
     return connection.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
 }
 
