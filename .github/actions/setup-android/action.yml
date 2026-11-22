@@ -1,0 +1,38 @@
+name: 准备 Android 构建环境
+description: 安装 JDK、缓存 Gradle，并按 libs.versions.toml 安装 SDK 平台
+
+runs:
+  using: composite
+  steps:
+    - name: 赋予 gradlew 执行权限
+      shell: bash
+      run: chmod +x gradlew
+    - name: 安装 JDK 21
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: "21"
+    - uses: gradle/actions/setup-gradle@v4
+    - name: 安装 Android SDK 组件
+      shell: bash
+      run: |
+        set -euo pipefail
+        SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+        test -x "$SDKMANAGER"
+        SDK=$(sed -n 's/^compileSdk = "\(.*\)"/\1/p' gradle/libs.versions.toml | head -n1)
+        MINOR=$(sed -n 's/^compileSdkMinor = "\(.*\)"/\1/p' gradle/libs.versions.toml | head -n1)
+        echo "需求：compileSdk=$SDK minor=$MINOR"
+        echo y | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses >/dev/null 2>&1 || true
+        if ls "$ANDROID_HOME/platforms" 2>/dev/null | grep -q "^android-$SDK"; then
+          echo "平台已安装，跳过下载"
+        else
+          for pkg in "platforms;android-$SDK.$MINOR" "platforms;android-$SDK"; do
+            "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --channel=3 --install "$pkg" >/dev/null 2>&1 || true
+            "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install "$pkg" >/dev/null 2>&1 || true
+          done
+        fi
+        "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install "build-tools;35.0.0" "ndk;29.0.14206865" >/dev/null
+        ls "$ANDROID_HOME/platforms" | grep -q "^android-$SDK" || {
+          echo "安装后仍缺少 platforms;android-$SDK" >&2; ls "$ANDROID_HOME/platforms" >&2; exit 1;
+        }
+        echo "SDK 就绪"

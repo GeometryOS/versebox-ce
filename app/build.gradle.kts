@@ -399,15 +399,25 @@ fun remoteRomCandidates(source: RomEmbedSource): List<RomCandidate> {
     @Suppress("UNCHECKED_CAST")
     val releases = JsonSlurper().parseText(releasesJson) as List<Map<String, Any?>>
     val candidates = mutableListOf<RomCandidate>()
+    val examined = mutableListOf<String>()
     for (release in releases) {
         @Suppress("UNCHECKED_CAST")
         val assets = release["assets"] as? List<Map<String, Any?>> ?: continue
-        val manifest = assets.firstOrNull { (it["name"] as? String) == "pack-audit-intent.json" } ?: continue
         val tag = (release["tag_name"] as? String) ?: "unknown"
+        examined += tag
+        val manifest = assets.firstOrNull { (it["name"] as? String) == "pack-audit-intent.json" } ?: continue
         val cacheDir = File(romEmbedCacheDir, source.id + "/audit/" + tag).apply { mkdirs() }
         val manifestFile = File(cacheDir, "pack-audit-intent.json")
         downloadTo(manifest["browser_download_url"] as String, manifestFile)
         candidates += RomCandidate(readRomAuditIntent(manifestFile), null, assets)
+    }
+    if (candidates.isEmpty()) {
+        throw GradleException(
+            "上游 ROM 仓库 Release 缺少 pack-audit-intent.json（" + owner + "/" + slug +
+                "，检查过 " + examined.size + " 个 Release" +
+                (if (examined.isEmpty()) "" else "：" + examined.joinToString(", ")) + "）。" +
+                "请先按新机制发布该 ROM，或在 rom-embed.env 中移除或固定这一条。",
+        )
     }
     return candidates
 }
@@ -458,8 +468,8 @@ fun selectRomCandidate(source: RomEmbedSource): RomCandidate {
     val all = if (source.release != null) remoteRomCandidates(source) else localRomCandidates(source)
     if (all.isEmpty()) {
         throw GradleException(
-            "rom-embed: " + source.id + " 没有找到 pack-audit-intent.json。" +
-                "ROM 必须按 dist/<romKey>/ 隔离并附带审计清单；旧平面 dist 不再被猜测式接受。",
+            "本地 ROM 目录缺少 pack-audit-intent.json（" + source.id + "）。" +
+                "ROM 必须按 dist/<romKey>/ 隔离并附带审计清单；旧平面 dist 不再被接受。",
         )
     }
     val compatible = all.filter { it.audit.minAppVersionCode <= appVersionCode }
@@ -478,10 +488,14 @@ fun selectRomCandidate(source: RomEmbedSource): RomCandidate {
         }
         throw GradleException("rom-embed: " + source.id + " 选择失败：" + why + "；候选：" + seen)
     }
-    val dir = materializeRomCandidate(chosen, source)
-    verifyRomCandidate(chosen.audit, dir)
     logger.lifecycle("rom-embed: " + source.id + " 选中 " + chosen.audit.romKey + "（VERSION=" + (source.version ?: "maxcv") + "）")
-    return RomCandidate(chosen.audit, dir, chosen.assets)
+    return chosen
+}
+
+fun materializeSelected(candidate: RomCandidate, source: RomEmbedSource): RomCandidate {
+    val dir = materializeRomCandidate(candidate, source)
+    verifyRomCandidate(candidate.audit, dir)
+    return RomCandidate(candidate.audit, dir, candidate.assets)
 }
 
 /** 同卷硬链接，跨卷才复制（避免为入库再复制一份 GB 级副本）。 */
@@ -837,6 +851,23 @@ val stageRomAssets = tasks.register("stageRomAssets") {
         romEmbedStagingDir.mkdirs()
 
         val sources = readRomEmbedSources()
+        // 先把每条 source 都解析完，再决定是否继续：任何一条不可用都给出完整中文清单，
+        // 而不是在第一条上报一堆堆栈。解析阶段只读清单，不下载大文件。
+        val selectedBySource = LinkedHashMap<String, RomCandidate>()
+        val failures = mutableListOf<String>()
+        for (source in sources) {
+            try {
+                selectedBySource[source.id] = selectRomCandidate(source)
+            } catch (failure: Exception) {
+                failures += source.id + "：" + (failure.message ?: failure.javaClass.simpleName)
+            }
+        }
+        if (failures.isNotEmpty()) {
+            throw GradleException(
+                "以下 ROM 源无法入库（共 " + failures.size + " 条）：\n" +
+                    failures.joinToString("\n") { "  - " + it }
+            )
+        }
         val indexEntries = mutableListOf<MutableMap<String, Any?>>()
         val residentBySource = LinkedHashMap<String, List<String>>()
         var total = 0L
@@ -869,7 +900,7 @@ val stageRomAssets = tasks.register("stageRomAssets") {
                 residentBySource[source.name] = libs.map { it.name }
                 continue
             }
-            val selected = selectRomCandidate(source)
+            val selected = materializeSelected(selectedBySource.getValue(source.id), source)
             val audit = selected.audit
             val dir = selected.localDir
                 ?: throw GradleException("rom-embed: " + source.id + " 没有落到本地目录")
