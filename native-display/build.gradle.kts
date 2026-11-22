@@ -26,7 +26,6 @@ plugins { id("com.android.library") }
 //                                                   （工具链齐全时由本模块的
 //                                                   :native-display:buildDesktopWindowRenderer 生成）
 //   3. native-display/build/prepared                同一构建的旧暂存目录
-//   4. runtime-inputs/native-display                A10 捆绑那份（兜底：没有 GLES1，会告警）
 // =============================================================================
 
 val rootDirFile: File = rootProject.projectDir
@@ -34,7 +33,6 @@ val a15Dir: File = File(rootDirFile, "guest-runtime-a15")
 val rendererScript: File = File(a15Dir, "scripts/build-desktop-window.sh")
 val sourceBuiltRoot: File = File(a15Dir, "artifacts/native-display")
 val legacyBuiltRoot: File = File(projectDir, "build/prepared")
-val bundledRoot: File = File(rootDirFile, "runtime-inputs/native-display")
 
 val explicitRoot: File? = providers.gradleProperty("nativeDisplayPrepared").orNull
     ?.let { rootProject.file(it) }
@@ -179,8 +177,7 @@ val buildDesktopWindowRenderer: TaskProvider<Exec>? = if (canBuildFromSource) {
 val displayRoot: File = explicitRoot ?: when {
     isGles1Renderer(sourceBuiltRoot) -> sourceBuiltRoot
     canBuildFromSource -> sourceBuiltRoot // 由 buildDesktopWindowRenderer 产出
-    isGles1Renderer(legacyBuiltRoot) -> legacyBuiltRoot
-    else -> bundledRoot
+    else -> legacyBuiltRoot
 }
 
 android {
@@ -211,12 +208,6 @@ fun sha256(file: File): String {
 
 val verifyRenderer = tasks.register("verifyRenderer") {
     buildDesktopWindowRenderer?.let { dependsOn(it) }
-    if (explicitRoot == null && displayRoot == bundledRoot &&
-        !File(bundledRoot, "jniLibs/arm64-v8a").isDirectory
-    ) {
-        // 干净检出 + 没有 bash/NDK：兜底只能走 A10 那份，那也得先把捆绑包解出来。
-        dependsOn(rootProject.tasks.named("bootstrapBundledRuntime"))
-    }
     doLast {
         if (skipVerify) return@doLast
         val relative = displayRoot.absolutePath.removePrefix(rootDirFile.absolutePath)
@@ -227,7 +218,7 @@ val verifyRenderer = tasks.register("verifyRenderer") {
                 "源码构建：sh guest-runtime-a15/scripts/build-desktop-window.sh" +
                 "（或直接 gradlew :native-display:buildDesktopWindowRenderer，需要 NDK 29 + bash）\n" +
                 "显式指定：-PnativeDisplayPrepared=<含 jniLibs/ 与 assets/ 的目录>\n" +
-                "干净检出时也可以从 _bin/A10VM.apk 自动解包（那份没有 GLES1，会让 ES1 应用崩）。"
+                "干净检出时请先构建渲染器，或用 -PnativeDisplayPrepared=<含 jniLibs/ 与 assets/ 的目录>。"
         }
         val gles1 = isGles1Renderer(displayRoot)
 

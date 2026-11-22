@@ -29,3 +29,10 @@
 本地还没有运行根 Gradle 的 test 或 assembleDebug。GitHub Actions yaml 也还没有交由 GitHub runner 解释。仓库现状的 compileSdk 是 37，workflows 已改为安装 platform 37；runner 能否安装该平台、Maven Packages token 是否有权限，需要首轮 Actions 输出确认。
 
 app/rom-embed.local.json 是本机被 ignore 的现有配置，本次没有覆盖或删除它。A15 的 doc/RELEASE/ARTIFACTS.md 在开始时已有维护者改动，本次未触碰。
+
+## 2026-11-22 追加：参考 APK 兜底已移除
+
+- 根 `build.gradle.kts` 删除 `bootstrapBundledRuntime` / `cleanRuntimeInputs`，不再从 `_bin/A10VM.apk` 解包 `runtime-inputs/`。
+- `:guest-runtime` 只接受 `-PguestRuntimePrepared` 或 `guest-runtime-a10/prepared-apk`；缺失时给出明确错误。
+- `:native-display` 只接受 `-PnativeDisplayPrepared`、源码构建产物或旧暂存目录；不再回落到捆绑 APK。
+- 已用 `:app:help` 验证 Gradle 配置通过；未做完整 APK 与真机验证。

@@ -14,9 +14,9 @@ plugins { id("com.android.library") }
 val preparedRoot: File? = providers.gradleProperty("guestRuntimePrepared").orNull
     ?.let { rootProject.file(it) }
 val a10Root = rootProject.layout.projectDirectory.dir("guest-runtime-a10/prepared-apk").asFile
-val legacyRoot = rootProject.layout.projectDirectory.dir("runtime-inputs/guest-runtime").asFile
-// 兼容期：没有 guest-runtime-a10/prepared-apk 时退回旧的 runtime-inputs（老布局）。
-val runtimeRoot = preparedRoot ?: if (a10Root.isDirectory) a10Root else legacyRoot
+// 只接受源码构建产物：-PguestRuntimePrepared 或 guest-runtime-a10/prepared-apk。
+// 参考 APK 解包（runtime-inputs）已移除，避免把来路不明的旧产物打进 APK。
+val runtimeRoot = preparedRoot ?: a10Root
 
 android {
     namespace = "io.a10vm.guestruntime"
@@ -44,15 +44,10 @@ fun sha256(file: File): String {
     return digest.digest().joinToString("") { "%02x".format(it) }
 }
 
-// 干净检出（既没有 prepared-apk 也没有旧的 runtime-inputs）时才回落到参考 APK 解包，
-// 保持「裸 gradlew assembleDebug 也能出 A10」的老体验；正常开发有 prepared-apk 时不跑它。
-val needLegacyBootstrap = preparedRoot == null && !a10Root.isDirectory && !legacyRoot.isDirectory
-// ciSkipNativeVerify 是「只编代码、不要客体运行库」的逃生口。它必须把 bootstrap 依赖也一起关掉：
-// 否则干净检出（_bin/A10VM.apk 不在仓库里）时 bootstrapBundledRuntime 会先抛异常，开关形同虚设。
+// ciSkipNativeVerify 是「只编代码、不要客体运行库」的逃生口。
 val skipNativeVerify = providers.gradleProperty("ciSkipNativeVerify").isPresent
 
 val verifyRuntime = tasks.register("verifyRuntime") {
-    if (needLegacyBootstrap && !skipNativeVerify) dependsOn(rootProject.tasks.named("bootstrapBundledRuntime"))
     doLast {
         if (skipNativeVerify) {
             logger.lifecycle(
@@ -66,7 +61,7 @@ val verifyRuntime = tasks.register("verifyRuntime") {
             "缺少 Android 10 ROM 运行库输入：$manifest\n" +
                 "A10 的运行时目录属于 guest-runtime-a10 仓库，在本仓库根跑一次：\n" +
                 "  sh guest-runtime-a10/scripts/build-a10.sh --skip-rom\n" +
-                "（它从 _bin/A10VM.apk 抽 prepared/，再产出 prepared-apk/；或" +
+                "（它从 Redroid 镜像抽 prepared/，再产出 prepared-apk/；或" +
                 "传入 -PguestRuntimePrepared=<prepared-apk 目录>。）"
         }
         val json = JsonSlurper().parse(manifest) as Map<*, *>

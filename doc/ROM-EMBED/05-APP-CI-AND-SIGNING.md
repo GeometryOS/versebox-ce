@@ -1,15 +1,12 @@
 # app CI 与签名发布
 
-根 app CI 共五个**独立** workflow：app-tests 为入口（push/PR 触发），经 workflow_run 依次触发 app-rom-stage、app-debug-build、app-apk-audit；release 由 tag 推送直接触发。每阶段单独显示、单独失败，任何失败均阻断后续 APK 和 Release。
+根 app CI 共三个**独立** workflow：app-tests（push/PR）与 app-build（push/PR，内部 tests → rom-stage → debug → audit 依次依赖）；app-release 由 tag 推送触发。push 上显示 2/2，tag 上 3/3。
 
 | Workflow | 阶段 | 失败门禁 |
 | --- | --- | --- |
-| `app-tests.yml` | 入口：push/PR 触发，跑模块单测并汇总 JUnit | 测试非零或零报告即失败 |
-| `app-tests.yml` | 跑每个 Gradle 模块已有的 Kotlin/Java unit tests，上传 XML 与简明统计 | Gradle 测试任务非零即失败；报告上传不改变结果 |
-| `app-rom-stage.yml` | tests 成功后触发：读 rom-embed.env，按 VERSION 选包并校验清单 | 缺清单、版本不兼容或哈希不符即失败 |
-| `app-debug-build.yml` | stage 成功后触发：取回 staging 并构建 Debug APK | 构建失败即失败 |
-| `app-apk-audit.yml` | debug 成功后触发：审计 APK 内 ROM index 与 lib/*.so | 缺 index 或 lib 为空即失败 |
-| `release.yml` | tag 推送触发：自足构建 full/minimal、验签、发 Release | Secret 缺失、构建/验签/hash 错误均阻断发布 |
+| `app-tests.yml` | push/PR：模块单测 + JUnit 汇总 | 测试非零或无报告即失败 |
+| `app-build.yml` | push/PR：tests → rom-stage → debug → audit 四段依赖 | 任一 job 失败则后续不执行 |
+| `app-release.yml` | tag `vX.Y.Z`：自足构建 full/minimal、验签、发布 | Secret 缺失、构建/验签/hash 错误均阻断 |
 
 JKS 不入库。若 Miuix GitHub Packages 依赖仍为私有包，还需在包仓库设置中授权 VerseBox 仓库读取；Actions job 使用 packages: read 与 GITHUB_TOKEN。将 JKS 原文件 Base64 编码后设置为仓库或环境级 Actions secret `ANDROID_KEYSTORE_BASE64`；同时设置 `ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS` 与 `ANDROID_KEY_PASSWORD`。secret 只能由 release job 读取。建议用 PowerShell 编码，不把明文或编码结果写入仓库：
 
