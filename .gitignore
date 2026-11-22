@@ -19,9 +19,8 @@ guest-runtime-a15/
 app/src/main/jniLibs/
 python/
 
-# ROM 入库：本机覆盖配置（引用本地工作区的发布产物）与 Release 下载缓存都是本机产物，不入库。
-# 仓库默认配置是 app/rom-embed.json（按 GitHub Release 拉），那份**必须**入库。
-app/rom-embed.local.json
+# ROM 入库：默认配置模板跟踪，本机dist覆盖和Release下载缓存不入库。
+app/rom-embed.env
 _rom_cache/
 *.jks
 *.keystore

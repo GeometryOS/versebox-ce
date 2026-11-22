@@ -8,6 +8,7 @@ import groovy.json.JsonSlurper
 import java.io.File
 import java.net.URI
 import java.nio.file.Files
+import java.security.MessageDigest
 import java.util.zip.ZipFile
 
 plugins {
@@ -19,6 +20,19 @@ plugins {
 }
 
 val miuiTrial = providers.gradleProperty("guestRuntimeProfile").orNull == "miui12"
+val releaseSigningRequired = providers.gradleProperty("requireReleaseSigning").orNull == "true"
+val releaseKeystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+val releaseSigningValues = mapOf(
+    "ANDROID_KEYSTORE_PATH" to releaseKeystorePath,
+    "ANDROID_KEYSTORE_PASSWORD" to System.getenv("ANDROID_KEYSTORE_PASSWORD"),
+    "ANDROID_KEY_ALIAS" to System.getenv("ANDROID_KEY_ALIAS"),
+    "ANDROID_KEY_PASSWORD" to System.getenv("ANDROID_KEY_PASSWORD"),
+)
+if (releaseSigningRequired && releaseSigningValues.any { it.value.isNullOrBlank() }) {
+    throw GradleException(
+        "Release signing requires ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, and ANDROID_KEY_PASSWORD"
+    )
+}
 val gprUser: String? = (findProperty("gpr.user") as String?) ?: System.getenv("GITHUB_ACTOR")
 val gprKey: String? = (findProperty("gpr.key") as String?) ?: System.getenv("GITHUB_TOKEN")
 val miuixVersion: String = (findProperty("miuixVersion") as String?)
@@ -30,6 +44,21 @@ android {
 
     compileSdk = libs.versions.compileSdk.get().toInt()
     compileSdkMinor = libs.versions.compileSdkMinor.get().toInt()
+
+    signingConfigs {
+        create("release") {
+            releaseKeystorePath?.let { storeFile = File(it) }
+            storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+            keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+            keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            signingConfig = signingConfigs.getByName("release")
+        }
+    }
 
     defaultConfig {
         applicationId = if (miuiTrial) "io.a10vm.miui" else "me.kanadex.versebox"
@@ -72,14 +101,14 @@ val miuixFromLocalRepo = miuixVersion == "0.9.4-292d8ec6"
 if (!miuixVersion.endsWith("-SNAPSHOT") && !miuixFromLocalRepo) {
     throw GradleException(
         "miuix $miuixVersion 是 Maven Central 正式版，它编在 material-color-utilities 5.0.1 上，" +
-            "与本工程的 material-kolor 6.0.0 / Cmf 调色板 / Spec 2026 不兼容：" +
-            "① ThemePaletteStyle 没有 Cmf、ThemeColorSpec 没有 Spec2026、" +
-            "ColorSpec.SpecVersion 没有 SPEC_2026，编译期就过不去；" +
-            "② 把 utilities force 回 5.0.1 会反过来打断 material-kolor 6.0.0，" +
-            "启动即 NoClassDefFoundError（DynamicScheme\$Platform 从 scheme 包搬到了 dynamiccolor 包）。" +
-            "请改用与 InstallerX 对齐的 SNAPSHOT：gradle/libs.versions.toml 里 " +
-            "miuix = \"0.9.4-292d8ec6-SNAPSHOT\"；凭据放 ~/.gradle/gradle.properties 的 " +
-            "gpr.user / gpr.key（或环境变量 GITHUB_ACTOR / GITHUB_TOKEN，需 read:packages）。"
+                "与本工程的 material-kolor 6.0.0 / Cmf 调色板 / Spec 2026 不兼容：" +
+                "① ThemePaletteStyle 没有 Cmf、ThemeColorSpec 没有 Spec2026、" +
+                "ColorSpec.SpecVersion 没有 SPEC_2026，编译期就过不去；" +
+                "② 把 utilities force 回 5.0.1 会反过来打断 material-kolor 6.0.0，" +
+                "启动即 NoClassDefFoundError（DynamicScheme\$Platform 从 scheme 包搬到了 dynamiccolor 包）。" +
+                "请改用与 InstallerX 对齐的 SNAPSHOT：gradle/libs.versions.toml 里 " +
+                "miuix = \"0.9.4-292d8ec6-SNAPSHOT\"；凭据放 ~/.gradle/gradle.properties 的 " +
+                "gpr.user / gpr.key（或环境变量 GITHUB_ACTOR / GITHUB_TOKEN，需 read:packages）。"
     )
 }
 
@@ -145,25 +174,86 @@ dependencies {
 
 
 data class RomEmbedSource(
+    val id: String,
     val name: String,
     val release: String?,
     val dir: String?,
     val zip: String?,
     val only: List<String>,
     val mode: String,
+    val version: String?,
     val residentLibs: String?,
     val legacyPreparedApk: String?,
 )
 
-val romEmbedConfigFile: File = run {
-    val explicit = (findProperty("verseboxRomEmbed") as String?)?.let { rootProject.file(it) }
-    val local = project.file("rom-embed.local.json")
-    when {
-        explicit != null -> explicit
-        local.isFile -> local
-        else -> project.file("rom-embed.json")
+data class RomAuditFile(val name: String, val bytes: Long, val sha256: String)
+data class RomAuditIntent(
+    val romKey: String,
+    val minAppVersionCode: Int,
+    val packSeconds: Double,
+    val files: List<RomAuditFile>,
+)
+
+val romEmbedEnvFile = project.file("rom-embed.env")
+val romEmbedExampleFile = project.file("rom-embed.env.example")
+val romEmbedConfigFile = romEmbedEnvFile
+
+fun parseRomDotEnv(text: String): Map<String, String> {
+    val values = linkedMapOf<String, String>()
+    text.lineSequence().forEachIndexed { lineIndex, raw ->
+        val line = raw.trim()
+        if (line.isEmpty() || line.startsWith("#")) return@forEachIndexed
+        val match = Regex("^([A-Z][A-Z0-9_]*)=(.*)$").matchEntire(line)
+            ?: throw GradleException("rom-embed.env:" + (lineIndex + 1) + ": expected KEY=value")
+        val key = match.groupValues[1]
+        val value = match.groupValues[2].trim().removeSurrounding("\\\"").removeSurrounding("'")
+        if (values.containsKey(key)) throw GradleException("rom-embed.env:" + (lineIndex + 1) + ": duplicate key " + key)
+        values[key] = value
+    }
+    return values
+}
+
+fun readRomDotEnv(file: File): List<RomEmbedSource> {
+    val values = parseRomDotEnv(file.readText(Charsets.UTF_8))
+    val count = values["ROM_SOURCE_COUNT"]?.toIntOrNull()
+        ?: throw GradleException("rom-embed.env: ROM_SOURCE_COUNT must be a positive integer")
+    if (count < 1) throw GradleException("rom-embed.env: ROM_SOURCE_COUNT must be positive")
+    val expected = (1..count).map { "ROM_SOURCE_" + it }.toSet()
+    val prefixes = values.keys.mapNotNull { Regex("^(ROM_SOURCE_[0-9]+)_ID$").matchEntire(it)?.groupValues?.get(1) }.toSet()
+    if (prefixes != expected) throw GradleException("rom-embed.env: ROM source ids must be numbered contiguously from 1 through " + count)
+    return (1..count).map { index ->
+        val prefix = "ROM_SOURCE_" + index
+        fun required(suffix: String): String = values[prefix + "_" + suffix]?.takeIf { it.isNotBlank() }
+            ?: throw GradleException("rom-embed.env: " + prefix + "_" + suffix + " is required")
+        val id = required("ID")
+        if (!Regex("[a-z0-9][a-z0-9._-]*").matches(id)) throw GradleException("Invalid ROM id: " + id)
+        val type = required("TYPE").lowercase()
+        val localPath = values[prefix + "_PATH"]?.takeIf { it.isNotBlank() }
+        val repository = values[prefix + "_REPOSITORY"]?.takeIf { it.isNotBlank() }
+        if (type == "local" && localPath == null) throw GradleException("" + prefix + "_PATH is required for TYPE=local")
+        if (type == "github" && repository == null) throw GradleException("" + prefix + "_REPOSITORY is required for TYPE=github")
+        if (type !in setOf("local", "github")) throw GradleException("" + prefix + "_TYPE must be local or github")
+        val version = required("VERSION")
+        if (version != "maxcv" && !Regex("[0-9]+\\.[0-9]+\\.[0-9]+").matches(version)) {
+            throw GradleException("" + prefix + "_VERSION must be MAJOR.MINOR.PATCH or maxcv")
+        }
+        val profile = (values[prefix + "_PROFILE"] ?: "full").lowercase()
+        if (profile !in setOf("full", "minimal", "libs")) throw GradleException("" + prefix + "_PROFILE must be full, minimal, or libs")
+        RomEmbedSource(
+            id = id,
+            name = id,
+            release = repository?.let { "https://github.com/" + it },
+            dir = localPath,
+            zip = null,
+            only = emptyList(),
+            mode = profile,
+            version = version,
+            residentLibs = null,
+            legacyPreparedApk = null,
+        )
     }
 }
+
 
 val romEmbedAssetDir = "kanadex-rom"
 val romDistDir = layout.buildDirectory.dir("rom-dist").get().asFile
@@ -178,146 +268,220 @@ val romDistJniRoot = File(romDistDir, "apk-libs")
 val romLegacyAssetsRoot = layout.buildDirectory.dir("generated/rom-legacy-assets").get().asFile
 val romEmbedCacheDir = rootProject.layout.projectDirectory.dir("_rom_cache").asFile
 val romAssetsStrict = (findProperty("verseboxRomStrict") as String?)?.toBoolean() ?: true
-
-/** 配置示例：构建时生成 */
-val romEmbedSample = """
-{
-  "schema": "versebox-rom-embed/2",
-  "assetDir": "kanadex-rom",
-  "about": [
-    "这个文件决定「这次打出来的 APK 里内置了哪些 ROM」。",
-    "按文件计，不按安卓版本计：每条 source 只描述一个 ROM 的发布产物在哪。",
-    "release: GitHub 仓库（拉最近一次 Release 的 versebox-*.zip / apk-resident-libs-*.tar）",
-    "dir:     本地发布产物目录（相对仓库根或绝对路径；同卷硬链接，不复制）",
-    "zip:     单个包（调试用）",
-    "only:    只取这些文件名（可省略）",
-    "mode:    full（默认，完整包）/ minimal（只带占位包）/ libs（只带 APK 必备 .so）"
-  ],
-  "sources": [
-    { "release": "https://github.com/GeometryOS/VerseBox-guest-runtime-a15" },
-    { "release": "https://github.com/GeometryOS/VerseBox-guest-runtime-a10" },
-    { "release": "https://github.com/GeometryOS/VerseBox-guest-runtime-a9" }
-  ]
+val requestedRomProfile = (findProperty("verseboxRomProfile") as String?)?.lowercase()
+if (requestedRomProfile != null && requestedRomProfile !in setOf("full", "minimal", "libs")) {
+    throw GradleException("verseboxRomProfile must be full, minimal, or libs")
 }
-""".trimIndent() + "\n"
 
-/** 读配置。 */
+/** Read only the mandatory dotenv source configuration. */
 fun readRomEmbedSources(): List<RomEmbedSource> {
-    if (!romEmbedConfigFile.isFile) {
-        val sample = File(romDistDir, "rom-embed.sample.json")
-        sample.parentFile.mkdirs()
-        sample.writeText(romEmbedSample, Charsets.UTF_8)
-        logger.lifecycle("rom-embed: 没有配置文件（${romEmbedConfigFile.name}）→ APK 不内置任何 ROM；示例已写到 ${sample.path}")
-        return emptyList()
+    if (!romEmbedEnvFile.isFile) {
+        if (!romEmbedExampleFile.isFile) throw GradleException("Missing app/rom-embed.env.example")
+        romEmbedExampleFile.copyTo(romEmbedEnvFile)
+        logger.lifecycle("rom-embed: created local config from " + romEmbedExampleFile.name)
     }
-    val parsed = runCatching { JsonSlurper().parseText(romEmbedConfigFile.readText(Charsets.UTF_8)) }.getOrElse {
-        logger.lifecycle("rom-embed: 配置不是合法 JSON（${romEmbedConfigFile.name}）→ 不内置任何 ROM")
-        return emptyList()
+    logger.lifecycle("rom-embed: dotenv config " + romEmbedEnvFile.path)
+    return readRomDotEnv(romEmbedEnvFile)
+}
+
+/* ---------- 版本指针与完整性校验（pack-audit-intent.json） ---------- */
+
+fun httpText(url: String): String {
+    val connection = URI(url).toURL().openConnection() as java.net.HttpURLConnection
+    connection.connectTimeout = 15_000
+    connection.readTimeout = 60_000
+    connection.setRequestProperty("Accept", "application/vnd.github+json")
+    System.getenv("GITHUB_TOKEN")?.takeIf { it.isNotBlank() }?.let {
+        connection.setRequestProperty("Authorization", "Bearer " + it)
     }
+    return connection.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
+}
+
+fun downloadTo(url: String, target: File) {
+    target.parentFile?.mkdirs()
+    val connection = URI(url).toURL().openConnection() as java.net.HttpURLConnection
+    connection.connectTimeout = 15_000
+    connection.readTimeout = 600_000
+    connection.setRequestProperty("Accept", "application/octet-stream")
+    System.getenv("GITHUB_TOKEN")?.takeIf { it.isNotBlank() }?.let {
+        connection.setRequestProperty("Authorization", "Bearer " + it)
+    }
+    connection.inputStream.use { input -> target.outputStream().use { sink -> input.copyTo(sink) } }
+}
+
+fun sha256Of(file: File): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    file.inputStream().buffered().use { input ->
+        val buffer = ByteArray(1024 * 1024)
+        while (true) {
+            val read = input.read(buffer)
+            if (read <= 0) break
+            digest.update(buffer, 0, read)
+        }
+    }
+    val hex = StringBuilder()
+    for (byte in digest.digest()) {
+        hex.append(Character.forDigit((byte.toInt() shr 4) and 0xF, 16))
+        hex.append(Character.forDigit(byte.toInt() and 0xF, 16))
+    }
+    return hex.toString()
+}
+
+fun readRomAuditIntent(file: File): RomAuditIntent {
     @Suppress("UNCHECKED_CAST")
-    val root = parsed as? Map<String, Any?> ?: return emptyList()
+    val root = runCatching {
+        JsonSlurper().parseText(file.readText(Charsets.UTF_8)) as Map<String, Any?>
+    }.getOrElse { throw GradleException(file.path + ": pack-audit-intent.json 不是合法 JSON") }
+    if (root["schema"] != "versebox-rom-pack-audit-intent/1") {
+        throw GradleException(file.path + ": schema 不是 versebox-rom-pack-audit-intent/1")
+    }
+    val romKey = (root["romKey"] as? String)?.takeIf { it.isNotBlank() }
+        ?: throw GradleException(file.path + ": 缺少 romKey")
+    val minApp = (root["minAppVersionCode"] as? Number)?.toInt()
+        ?: throw GradleException(file.path + ": 缺少 minAppVersionCode")
+    if (minApp < 1) throw GradleException(file.path + ": minAppVersionCode 必须是正整数")
     @Suppress("UNCHECKED_CAST")
-    val sources = root["sources"] as? List<Map<String, Any?>> ?: return emptyList()
-    return sources.mapIndexed { index, item ->
-        val release = (item["release"] as? String)?.takeIf { it.isNotBlank() }
-        val dir = ((item["dir"] ?: item["localDir"]) as? String)?.takeIf { it.isNotBlank() }
-        val single = (item["zip"] as? String)?.takeIf { it.isNotBlank() }
-        RomEmbedSource(
-            // 名字只用于日志、缓存目录与 tar 文件名；省略时从来源推出来，不要求用户起名。
-            name = (item["name"] as? String)?.takeIf { it.isNotBlank() }
-                ?: dir?.trimEnd('/', '\\')?.substringAfterLast('/')?.substringAfterLast('\\')
-                ?: release?.trimEnd('/')?.substringAfterLast('/')
-                ?: single?.substringAfterLast('/')?.substringBeforeLast('.')
-                ?: "rom-${index}",
-            release = release,
-            dir = dir,
-            zip = single,
-            only = (item["only"] as? List<*>)?.mapNotNull { it as? String }.orEmpty(),
-            mode = ((item["mode"] as? String) ?: "full").lowercase().let {
-                if (it in setOf("full", "minimal", "libs")) it else "full"
-            },
-            residentLibs = (item["residentLibs"] as? String)?.takeIf { it.isNotBlank() },
-            legacyPreparedApk = (item["legacyPreparedApk"] as? String)?.takeIf { it.isNotBlank() },
+    val rawFiles = root["files"] as? List<Map<String, Any?>>
+        ?: throw GradleException(file.path + ": 缺少 files")
+    val files = rawFiles.map { item ->
+        val name = (item["name"] as? String)?.takeIf { it.isNotBlank() }
+            ?: throw GradleException(file.path + ": files 里有条目缺少 name")
+        val bytes = (item["bytes"] as? Number)?.toLong()
+            ?: throw GradleException(file.path + ": " + name + " 缺少 bytes")
+        val sha = (item["sha256"] as? String)?.lowercase()
+            ?: throw GradleException(file.path + ": " + name + " 缺少 sha256")
+        if (bytes < 1) throw GradleException(file.path + ": " + name + " 的 bytes 必须大于 0")
+        if (!Regex("[0-9a-f]{64}").matches(sha)) throw GradleException(file.path + ": " + name + " 的 sha256 不合法")
+        RomAuditFile(name, bytes, sha)
+    }
+    if (files.size < 2) throw GradleException(file.path + ": files 至少要有完整包与占位包")
+    if (files.map { it.name }.toSet().size != files.size) throw GradleException(file.path + ": files 里有重名条目")
+    return RomAuditIntent(romKey, minApp, (root["packSeconds"] as? Number)?.toDouble() ?: 0.0, files)
+}
+
+fun versionOf(romKey: String): String = romKey.substringAfterLast('@')
+
+fun compareVersion(left: String, right: String): Int {
+    val a = left.split('.').map { it.toIntOrNull() ?: 0 }
+    val b = right.split('.').map { it.toIntOrNull() ?: 0 }
+    for (index in 0 until maxOf(a.size, b.size)) {
+        val x = a.getOrElse(index) { 0 }
+        val y = b.getOrElse(index) { 0 }
+        if (x != y) return x.compareTo(y)
+    }
+    return 0
+}
+
+data class RomCandidate(val audit: RomAuditIntent, val localDir: File?, val assets: List<Map<String, Any?>>)
+
+fun localRomCandidates(source: RomEmbedSource): List<RomCandidate> {
+    val raw = source.dir ?: source.zip ?: return emptyList()
+    val base = if (File(raw).isAbsolute) File(raw) else rootProject.file(raw)
+    val root = if (base.isFile) base.parentFile else base
+    if (root == null || !root.isDirectory) {
+        throw GradleException("rom-embed: " + source.id + " 的本地目录不存在：" + base.path)
+    }
+    return root.walkTopDown()
+        .filter { it.isFile && it.name == "pack-audit-intent.json" }
+        .mapNotNull { manifest ->
+            val dir = manifest.parentFile ?: return@mapNotNull null
+            RomCandidate(readRomAuditIntent(manifest), dir, emptyList())
+        }
+        .toList()
+}
+
+fun remoteRomCandidates(source: RomEmbedSource): List<RomCandidate> {
+    val base = source.release ?: return emptyList()
+    val trimmed = base.trimEnd('/')
+    val slug = trimmed.substringAfterLast('/')
+    val owner = trimmed.substringBeforeLast('/').substringAfterLast('/')
+    val releasesJson = httpText("https://api.github.com/repos/" + owner + "/" + slug + "/releases?per_page=100")
+    @Suppress("UNCHECKED_CAST")
+    val releases = JsonSlurper().parseText(releasesJson) as List<Map<String, Any?>>
+    val candidates = mutableListOf<RomCandidate>()
+    for (release in releases) {
+        @Suppress("UNCHECKED_CAST")
+        val assets = release["assets"] as? List<Map<String, Any?>> ?: continue
+        val manifest = assets.firstOrNull { (it["name"] as? String) == "pack-audit-intent.json" } ?: continue
+        val tag = (release["tag_name"] as? String) ?: "unknown"
+        val cacheDir = File(romEmbedCacheDir, source.id + "/audit/" + tag).apply { mkdirs() }
+        val manifestFile = File(cacheDir, "pack-audit-intent.json")
+        downloadTo(manifest["browser_download_url"] as String, manifestFile)
+        candidates += RomCandidate(readRomAuditIntent(manifestFile), null, assets)
+    }
+    return candidates
+}
+
+fun materializeRomCandidate(candidate: RomCandidate, source: RomEmbedSource): File {
+    candidate.localDir?.let { return it }
+    val target = File(romEmbedCacheDir, source.id + "/" + versionOf(candidate.audit.romKey)).apply { mkdirs() }
+    for (item in candidate.audit.files) {
+        val asset = candidate.assets.firstOrNull { (it["name"] as? String) == item.name }
+            ?: throw GradleException("rom-embed: Release 缺少清单声明的文件 " + item.name)
+        val file = File(target, item.name)
+        if (!file.isFile || file.length() != item.bytes) {
+            downloadTo(asset["browser_download_url"] as String, file)
+        }
+    }
+    target.listFiles().orEmpty()
+        .filter { it.isFile && candidate.audit.files.none { item -> item.name == it.name } }
+        .forEach { it.delete() }
+    return target
+}
+
+fun verifyRomCandidate(audit: RomAuditIntent, dir: File) {
+    val actual = dir.listFiles().orEmpty()
+        .filter { it.isFile && it.name != "pack-audit-intent.json" }
+        .map { it.name }
+        .toSet()
+    val declared = audit.files.map { it.name }.toSet()
+    if (actual != declared) {
+        val missing = (declared - actual).sorted()
+        val extra = (actual - declared).sorted()
+        throw GradleException("rom-embed: " + audit.romKey + " 与审计清单不一致；缺少=" + missing + " 多余=" + extra)
+    }
+    for (item in audit.files) {
+        val file = File(dir, item.name)
+        if (file.length() != item.bytes) {
+            throw GradleException("rom-embed: " + item.name + " 字节数不符（期望 " + item.bytes + "，实际 " + file.length() + "）")
+        }
+        val digest = sha256Of(file)
+        if (digest != item.sha256) {
+            throw GradleException("rom-embed: " + item.name + " SHA-256 不符（期望 " + item.sha256 + "，实际 " + digest + "）")
+        }
+    }
+    logger.lifecycle("rom-embed: " + audit.romKey + " 完整性通过（" + audit.files.size + " 个文件，minAppVersionCode=" + audit.minAppVersionCode + "）")
+}
+
+fun selectRomCandidate(source: RomEmbedSource): RomCandidate {
+    val appVersionCode = android.defaultConfig.versionCode ?: 0
+    val all = if (source.release != null) remoteRomCandidates(source) else localRomCandidates(source)
+    if (all.isEmpty()) {
+        throw GradleException(
+            "rom-embed: " + source.id + " 没有找到 pack-audit-intent.json。" +
+                "ROM 必须按 dist/<romKey>/ 隔离并附带审计清单；旧平面 dist 不再被猜测式接受。",
         )
     }
-}
-
-fun resolveRomSourceDir(source: RomEmbedSource): File? {
-    source.zip?.let { raw ->
-        val file = if (File(raw).isAbsolute) File(raw) else rootProject.file(raw)
-        if (!file.isFile) {
-            logger.lifecycle("rom-embed: 跳过 ${source.name}：包不存在 ${file.path}")
-            return null
+    val compatible = all.filter { it.audit.minAppVersionCode <= appVersionCode }
+    val chosen = when (source.version) {
+        null, "maxcv" -> compatible.maxWithOrNull { a, b ->
+            compareVersion(versionOf(a.audit.romKey), versionOf(b.audit.romKey))
         }
-        return file.parentFile
+        else -> compatible.firstOrNull { versionOf(it.audit.romKey) == source.version }
     }
-    source.dir?.let { raw ->
-        val dir = if (File(raw).isAbsolute) File(raw) else rootProject.file(raw)
-        if (!dir.isDirectory) {
-            logger.lifecycle("rom-embed: 跳过 ${source.name}：目录不存在 ${dir.path}")
-            return null
+    if (chosen == null) {
+        val seen = all.joinToString(", ") { it.audit.romKey + "（minApp=" + it.audit.minAppVersionCode + "）" }
+        val why = if (compatible.isEmpty()) {
+            "没有版本兼容当前 app versionCode=" + appVersionCode
+        } else {
+            "没有匹配 VERSION=" + source.version
         }
-        return dir
+        throw GradleException("rom-embed: " + source.id + " 选择失败：" + why + "；候选：" + seen)
     }
-    val release = source.release ?: run {
-        logger.lifecycle("rom-embed: 跳过 ${source.name}：既没有 release / dir 也没有 zip")
-        return null
-    }
-    return runCatching { downloadRelease(source.name, release) }.getOrElse { failure ->
-        // 拉取失败就是跳过（docs/rom-release/01 §4）——不把"没网"变成"构建失败"。
-        logger.lifecycle("rom-embed: 跳过 ${source.name}：拉取 ${release} 失败（${failure.message}）")
-        null
-    }
-}
-
-/**
- * 从 GitHub Release 拉 ROM 产物到 <工作区>/_rom_cache/<name>/：
- * download/ 放原始下载，build/ 放"处理过、要进 APK"的那一份。
- */
-fun downloadRelease(name: String, releaseUrl: String): File? {
-    val base = releaseUrl.trimEnd('/')
-    val slug = base.substringAfterLast('/')
-    val owner = base.substringBeforeLast('/').substringAfterLast('/')
-    val download = File(romEmbedCacheDir, name + "/download").apply { mkdirs() }
-    val built = File(romEmbedCacheDir, name + "/build").apply { mkdirs() }
-    val api = URI("https://api.github.com/repos/${owner}/${slug}/releases/latest").toURL()
-    val json = api.openConnection().let { connection ->
-        (connection as java.net.HttpURLConnection).apply {
-            connectTimeout = 15_000
-            readTimeout = 30_000
-            setRequestProperty("Accept", "application/vnd.github+json")
-        }
-        connection.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
-    }
-    @Suppress("UNCHECKED_CAST")
-    val release = JsonSlurper().parseText(json) as Map<String, Any?>
-    @Suppress("UNCHECKED_CAST")
-    val assets = release["assets"] as? List<Map<String, Any?>> ?: emptyList()
-    val wanted = assets.filter { asset ->
-        val assetName = (asset["name"] as? String).orEmpty()
-        assetName.endsWith(".zip") || assetName.endsWith(".tar")
-    }
-    if (wanted.isEmpty()) {
-        logger.lifecycle("rom-embed: ${name} 的 Release 里没有任何 ROM 产物")
-        return null
-    }
-    for (asset in wanted) {
-        val assetName = asset["name"] as String
-        val target = File(download, assetName)
-        if (!target.isFile || target.length() != (asset["size"] as? Number)?.toLong()) {
-            val url = asset["browser_download_url"] as String
-            logger.lifecycle("rom-embed: 下载 ${assetName} …")
-            URI(url).toURL().openStream().use { input ->
-                target.outputStream().use { output -> input.copyTo(output) }
-            }
-        }
-        if (assetName.endsWith(".zip")) {
-            linkOrCopy(target, File(built, assetName))
-        } else if (assetName.endsWith(".tar")) {
-            extractTar(target, built)
-        }
-    }
-    return built
+    val dir = materializeRomCandidate(chosen, source)
+    verifyRomCandidate(chosen.audit, dir)
+    logger.lifecycle("rom-embed: " + source.id + " 选中 " + chosen.audit.romKey + "（VERSION=" + (source.version ?: "maxcv") + "）")
+    return RomCandidate(chosen.audit, dir, chosen.assets)
 }
 
 /** 同卷硬链接，跨卷才复制（避免为入库再复制一份 GB 级副本）。 */
@@ -344,7 +508,7 @@ fun absorbResidentTar(tarFile: File, name: String): List<String> {
     libs.forEach { linkOrCopy(it, File(romDistLibs, it.name)) }
     if (libs.isNotEmpty()) {
         logger.lifecycle("rom-embed: " + name + " 从 " + tarFile.name + " 取到 " + libs.size +
-            " 个 APK 必备 .so：" + libs.joinToString(", ") { it.name })
+                " 个 APK 必备 .so：" + libs.joinToString(", ") { it.name })
     }
     return libs.map { it.name }
 }
@@ -671,7 +835,6 @@ val stageRomAssets = tasks.register("stageRomAssets") {
         romDistMin.mkdirs()
         romDistLibs.mkdirs()
         romEmbedStagingDir.mkdirs()
-        File(romDistDir, "rom-embed.sample.json").writeText(romEmbedSample, Charsets.UTF_8)
 
         val sources = readRomEmbedSources()
         val indexEntries = mutableListOf<MutableMap<String, Any?>>()
@@ -706,24 +869,20 @@ val stageRomAssets = tasks.register("stageRomAssets") {
                 residentBySource[source.name] = libs.map { it.name }
                 continue
             }
-            val dir = resolveRomSourceDir(source) ?: continue
-            val zips = dir.listFiles().orEmpty()
-                .filter { it.isFile && it.name.endsWith(".zip", ignoreCase = true) }
-                // -min.zip 是最小占位包（发布产物之一），不是"一个 ROM"，由下面的 shippedMin 消费。
-                .filter { !it.name.endsWith("-min.zip", ignoreCase = true) }
-                .filter { source.only.isEmpty() || it.name in source.only }
-                .sortedBy { it.name }
-            if (zips.isEmpty()) {
-                logger.lifecycle("rom-embed: 跳过 ${source.name}：目录里没有 zip（${dir.path}）")
-                continue
-            }
+            val selected = selectRomCandidate(source)
+            val audit = selected.audit
+            val dir = selected.localDir
+                ?: throw GradleException("rom-embed: " + source.id + " 没有落到本地目录")
+            val fullName = audit.files.map { it.name }
+                .firstOrNull { it.endsWith(".zip") && !it.endsWith("-min.zip") }
+                ?: throw GradleException("rom-embed: " + audit.romKey + " 的清单里没有完整 ROM 包")
+            val zips = listOf(File(dir, fullName))
             val residents = mutableListOf<String>()
-            // APK 必备 .so 的第一来源：发布产物里的 apk-resident-libs-*.tar。
-            // 这是"发布方算过、CI 校验过"的那一份；只有它缺失时才从 ROM 清单反推（见下面的 extractResidentLibs）。
+            // APK 必备 .so 只从选中的 romKey 目录里那份 resident tar 取。
             dir.listFiles().orEmpty()
                 .filter { it.isFile && it.name.endsWith(".tar", true) && it.name.contains("resident") }
                 .sortedBy { it.name }
-                .forEach { tar -> residents += absorbResidentTar(tar, source.name) }
+                .forEach { tar -> residents += absorbResidentTar(tar, source.id) }
             for (zip in zips) {
                 val (issues, entry) = romAssetReport(zip)
                 if (issues.isNotEmpty()) {
@@ -735,7 +894,7 @@ val stageRomAssets = tasks.register("stageRomAssets") {
                 // 1) APK 必备 .so：没有 resident tar 时才从包里的清单反推（resident: true 那几条）
                 if (residents.isEmpty()) residents += extractResidentLibs(zip, romDistLibs)
                 // 2) 最小占位包：发布产物里带了 -min.zip 就直接用（与发布一致），否则现生成。
-                val shippedMin = File(dir, zip.name.removeSuffix(".zip") + "-min.zip")
+                val shippedMin = File(zip.parentFile ?: dir, zip.name.removeSuffix(".zip") + "-min.zip")
                 val minimal = File(romDistMin, shippedMin.name)
                 val minOk = if (shippedMin.isFile) {
                     linkOrCopy(shippedMin, minimal)
@@ -744,7 +903,8 @@ val stageRomAssets = tasks.register("stageRomAssets") {
                     writeMinimalRom(zip, minimal)
                 }
                 // 3) 决定哪一份进 APK
-                val embedded = when (source.mode) {
+                val profile = requestedRomProfile ?: source.mode
+                val embedded = when (profile) {
                     "libs" -> null
                     "minimal" -> minimal.takeIf { minOk }
                     else -> zip
@@ -760,14 +920,14 @@ val stageRomAssets = tasks.register("stageRomAssets") {
                         continue
                     }
                     minEntry["sourceName"] = source.name
-                    minEntry["mode"] = source.mode
+                    minEntry["mode"] = profile
                     indexEntries += minEntry
                     total += embedded.length()
                     logger.lifecycle(
                         "rom-embed: 内置 " + minEntry["id"] + "@" + minEntry["romVersion"] +
-                            (if (source.mode == "minimal") "（最小占位包，" else "（") +
-                            embedded.name + "，" +
-                            "%.1f".format(embedded.length() / 1024.0 / 1024.0) + " MB）",
+                                (if (profile == "minimal") "（最小占位包，" else "（") +
+                                embedded.name + "，" +
+                                "%.1f".format(embedded.length() / 1024.0 / 1024.0) + " MB）",
                     )
                 } else {
                     logger.lifecycle("rom-embed: ${zip.name} 只带 APK 必备 .so，包不进安装包（mode=libs）")
@@ -785,7 +945,7 @@ val stageRomAssets = tasks.register("stageRomAssets") {
                         residents += libs.map { it.name }
                         logger.lifecycle(
                             "rom-embed: ${source.name} 的包没有 resident 标记，按 residentLibs 补 " +
-                                libs.size + " 个 .so（旧包回退，见 docs/rom-release/01 §3.2）",
+                                    libs.size + " 个 .so（旧包回退，见 docs/rom-release/01 §3.2）",
                         )
                     } else {
                         logger.lifecycle("rom-embed: ${source.name} 的 residentLibs 目录里没有 .so（${libDir.path}）")
@@ -796,7 +956,7 @@ val stageRomAssets = tasks.register("stageRomAssets") {
             if (residents.isEmpty()) {
                 logger.lifecycle(
                     "rom-embed: ${source.name} 没有抽到 resident .so。" +
-                        "如果这份包是老布局（清单没有 libPath），APK 的 lib/ 需要由 :guest-runtime-* 提供",
+                            "如果这份包是老布局（清单没有 libPath），APK 的 lib/ 需要由 :guest-runtime-* 提供",
                 )
             } else {
                 logger.lifecycle("rom-embed: ${source.name} APK 必备 .so ${residents.distinct().size} 个：${residents.distinct()}")
@@ -823,7 +983,7 @@ val stageRomAssets = tasks.register("stageRomAssets") {
         File(romDistDir, "index.json").writeText(indexText)
         logger.lifecycle(
             "rom-embed: " + indexEntries.size + " 个内置 ROM，合计 " +
-                "%.1f".format(total / 1024.0 / 1024.0) + " MB；产物目录 " + romDistDir.path,
+                    "%.1f".format(total / 1024.0 / 1024.0) + " MB；产物目录 " + romDistDir.path,
         )
         // 判据：APK 的 lib/ 是空的，等于"能装、能列 ROM、一启动就 EACCES"。
         // 这不是可以静默放过的告警（untrusted_app 不能从 app_data_file execve 客体文件）。
@@ -831,8 +991,8 @@ val stageRomAssets = tasks.register("stageRomAssets") {
         if (jniCount == 0) {
             logger.lifecycle(
                 "rom-embed: 警告 —— APK 的 lib/ 没有任何原生文件。原因通常是：配置里没有足够" +
-                    "的 source（resident tar / ROM 清单都没给出 resident 集合），也没有登记旧格式。" +
-                    "这种包装上去以后客体起不来（execve EACCES），不要拿去装机。",
+                        "的 source（resident tar / ROM 清单都没给出 resident 集合），也没有登记旧格式。" +
+                        "这种包装上去以后客体起不来（execve EACCES），不要拿去装机。",
             )
         } else {
             logger.lifecycle("rom-embed: APK 必备 .so 合计 " + jniCount + " 个（" + romDistLibs.path + "）")

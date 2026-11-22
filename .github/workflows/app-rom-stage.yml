@@ -1,0 +1,62 @@
+name: VerseBox ROM staging
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  stage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      GITHUB_ACTOR: ${{ github.actor }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+      - name: Install app SDK requirements
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install \
+            "platforms;android-37" "build-tools;35.0.0" "ndk;29.0.14206865"
+      - name: Resolve and validate ROM inputs
+        run: |
+          ./gradlew --no-daemon --stacktrace --console=plain \
+            :app:stageRomAssets -PverseboxRomStrict=true -PciSkipNativeVerify=true
+          python3 - <<'PY'
+          import json, pathlib
+          index = pathlib.Path('app/build/rom-dist/index.json')
+          if not index.is_file():
+              raise SystemExit('ROM staging did not write app/build/rom-dist/index.json')
+          entries = json.loads(index.read_text(encoding='utf-8')).get('entries', [])
+          if not entries:
+              raise SystemExit('ROM staging selected zero ROMs; refusing to build an empty APK')
+          keys = [entry.get('id', '') + '@' + entry.get('romVersion', '') for entry in entries]
+          if len(keys) != len(set(keys)):
+              raise SystemExit('ROM staging contains duplicate romKey values: ' + ', '.join(keys))
+          print('ROM staging: %d entries: %s' % (len(entries), ', '.join(keys)))
+          PY
+      - name: Upload selected ROM staging
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-rom-staging
+          path: |
+            app/build/rom-dist/apk-libs
+            app/build/generated/rom-assets
+            app/build/generated/rom-legacy-assets
+          if-no-files-found: error
