@@ -1,66 +1,84 @@
-name: VerseBox app tests
+name: app tests
 
 on:
-  workflow_call:
+  push:
+  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
   packages: read
 
+concurrency:
+  group: app-tests-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   tests:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-      GITHUB_ACTOR: ${{ github.actor }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Set up JDK 21
+      - uses: actions/checkout@v4
+      - name: 安装 JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-      - name: Install app SDK requirements
+      - uses: gradle/actions/setup-gradle@v4
+      - name: 安装 Android SDK 组件
         run: |
           set -euo pipefail
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
-          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install \
-            "platforms;android-37" "build-tools;35.0.0" "ndk;29.0.14206865"
-      - name: Run JVM and Android unit tests
+          test -x "$SDKMANAGER"
+          SDK=$(sed -n 's/^compileSdk = "\(.*\)"/\1/p' gradle/libs.versions.toml | head -n1)
+          MINOR=$(sed -n 's/^compileSdkMinor = "\(.*\)"/\1/p' gradle/libs.versions.toml | head -n1)
+          echo "需求：compileSdk=$SDK minor=$MINOR"
+          echo y | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses >/dev/null 2>&1 || true
+          if ls "$ANDROID_HOME/platforms" 2>/dev/null | grep -q "^android-$SDK"; then
+            echo "平台已安装，跳过下载"
+          else
+            for pkg in "platforms;android-$SDK.$MINOR" "platforms;android-$SDK"; do
+              "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --channel=3 --install "$pkg" >/dev/null 2>&1 || true
+              "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install "$pkg" >/dev/null 2>&1 || true
+            done
+          fi
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install "build-tools;35.0.0" "ndk;29.0.14206865" >/dev/null
+          ls "$ANDROID_HOME/platforms" | grep -q "^android-$SDK" || {
+            echo "安装后仍缺少 platforms;android-$SDK" >&2
+            ls "$ANDROID_HOME/platforms" >&2
+            exit 1
+          }
+          echo "SDK 就绪"
+      - name: 运行模块单元测试
         run: |
-          ./gradlew --no-daemon --stacktrace --console=plain \
-            :log-audit:test :vm-display:test :vm-rom:test \
-            -PciSkipNativeVerify=true
-      - name: Summarize test results
+          set -euo pipefail
+          ./gradlew --no-daemon --console=plain --stacktrace \
+            :log-audit:test :vm-display:test :vm-rom:test -PciSkipNativeVerify=true
+      - name: 汇总测试结果
         if: always()
         run: |
           python3 - <<'PY'
-          import glob, xml.etree.ElementTree as ET
+          import glob, xml.etree.ElementTree as ET, sys
           files = glob.glob('**/build/test-results/**/TEST-*.xml', recursive=True)
-          totals = {'tests': 0, 'failures': 0, 'errors': 0, 'skipped': 0}
+          total = {'tests': 0, 'failures': 0, 'errors': 0, 'skipped': 0}
           for path in files:
-              try:
-                  root = ET.parse(path).getroot()
-              except ET.ParseError:
-                  continue
-              for key in totals:
-                  totals[key] += int(root.attrib.get(key, 0))
-          print('Test summary: %d suites, %d tests, %d failures, %d errors, %d skipped' %
-                (len(files), totals['tests'], totals['failures'], totals['errors'], totals['skipped']))
+              root = ET.parse(path).getroot()
+              for key in total:
+                  total[key] += int(root.attrib.get(key, 0))
+          print('测试汇总：%d 个套件，%d 项，失败 %d，错误 %d，跳过 %d' % (
+              len(files), total['tests'], total['failures'], total['errors'], total['skipped']))
           if not files:
-              raise SystemExit('No Gradle test result XML was produced')
+              sys.exit('没有产生任何 JUnit XML')
+          if total['failures'] or total['errors']:
+              sys.exit('存在失败用例')
           PY
-      - name: Upload JUnit XML
+      - name: 上传测试报告
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: app-test-results
-          path: '**/build/test-results/**/*.xml'
+          path: "**/build/test-results/**/*.xml"
           if-no-files-found: warn

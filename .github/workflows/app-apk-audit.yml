@@ -1,0 +1,54 @@
+name: app apk audit
+
+on:
+  workflow_run:
+    workflows: ["app debug build"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: app-apk-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: 取回 Debug APK
+        if: github.event_name == 'workflow_run'
+        uses: actions/download-artifact@v4
+        with:
+          name: versebox-debug-apk
+          path: apk
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: 审计 APK 内容
+        run: |
+          set -euo pipefail
+          apk=$(find apk -name '*.apk' | head -n1)
+          test -n "$apk"
+          echo "APK：$apk"
+          echo "大小：$(stat -c%s "$apk") 字节"
+          sha256sum "$apk"
+          unzip -l "$apk" | grep -q 'assets/kanadex-rom/index.json' || { echo 'APK 缺少 ROM index' >&2; exit 1; }
+          unzip -p "$apk" assets/kanadex-rom/index.json > index.json
+          python3 - <<'PY'
+          import json, sys
+          entries = json.load(open('index.json', encoding='utf-8')).get('entries', [])
+          if not entries:
+              sys.exit('ROM index 为空')
+          keys = [e.get('id','') + '@' + e.get('romVersion','') for e in entries]
+          if len(keys) != len(set(keys)):
+              sys.exit('romKey 重复：' + ', '.join(keys))
+          print('内置 ROM：' + ', '.join(keys))
+          PY
+          libs=$(unzip -l "$apk" | grep -c 'lib/arm64-v8a/.*\.so' || true)
+          echo "APK 内 .so 数量：$libs"
+          test "$libs" -gt 0 || { echo 'APK 的 lib/ 为空，装机必失败' >&2; exit 1; }

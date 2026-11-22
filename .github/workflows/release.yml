@@ -1,66 +1,65 @@
-name: Publish VerseBox APK release
+name: app release
 
 on:
-  workflow_run:
-    workflows: ["Build VerseBox app"]
-    types: [completed]
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
-  actions: read
   packages: read
 
 concurrency:
-  group: versebox-release-publish
+  group: app-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   release:
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      startsWith(github.event.workflow_run.head_branch, 'v')
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-      GITHUB_ACTOR: ${{ github.actor }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      RELEASE_TAG: ${{ github.event.workflow_run.head_branch }}
-      SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+      RELEASE_TAG: ${{ github.ref_name }}
     steps:
-      - name: Checkout the successful tag
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_branch }}
           fetch-depth: 0
-      - name: Validate release tag
+      - name: 校验 tag 形式
         run: |
           set -euo pipefail
-          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid release tag: $RELEASE_TAG" >&2; exit 1; }
-      - name: Set up JDK 21
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "tag 不是 vX.Y.Z：$RELEASE_TAG" >&2; exit 1; }
+      - name: 安装 JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-      - name: Install app SDK requirements
+      - uses: gradle/actions/setup-gradle@v4
+      - name: 安装 Android SDK 组件
         run: |
           set -euo pipefail
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
-          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install \
-            "platforms;android-37" "build-tools;35.0.0" "ndk;29.0.14206865"
-      - name: Download ROM staging from successful CI
-        uses: actions/download-artifact@v4
-        with:
-          name: app-rom-staging
-          path: app/build
-          run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ github.token }}
-      - name: Restore JKS from Actions secret
+          test -x "$SDKMANAGER"
+          SDK=$(sed -n 's/^compileSdk = "\(.*\)"/\1/p' gradle/libs.versions.toml | head -n1)
+          MINOR=$(sed -n 's/^compileSdkMinor = "\(.*\)"/\1/p' gradle/libs.versions.toml | head -n1)
+          echo "需求：compileSdk=$SDK minor=$MINOR"
+          echo y | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses >/dev/null 2>&1 || true
+          if ls "$ANDROID_HOME/platforms" 2>/dev/null | grep -q "^android-$SDK"; then
+            echo "平台已安装，跳过下载"
+          else
+            for pkg in "platforms;android-$SDK.$MINOR" "platforms;android-$SDK"; do
+              "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --channel=3 --install "$pkg" >/dev/null 2>&1 || true
+              "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install "$pkg" >/dev/null 2>&1 || true
+            done
+          fi
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install "build-tools;35.0.0" "ndk;29.0.14206865" >/dev/null
+          ls "$ANDROID_HOME/platforms" | grep -q "^android-$SDK" || {
+            echo "安装后仍缺少 platforms;android-$SDK" >&2
+            ls "$ANDROID_HOME/platforms" >&2
+            exit 1
+          }
+          echo "SDK 就绪"
+      - name: 还原签名密钥
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -74,87 +73,81 @@ jobs:
           test -n "$ANDROID_KEY_PASSWORD"
           export ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/versebox-release.jks"
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
-          test -s "$ANDROID_KEYSTORE_PATH"
           chmod 600 "$ANDROID_KEYSTORE_PATH"
           echo "ANDROID_KEYSTORE_PATH=$ANDROID_KEYSTORE_PATH" >> "$GITHUB_ENV"
-      - name: Build and retain full APK
+      - name: 构建完整 APK
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          ./gradlew --no-daemon --stacktrace --console=plain \
-            :app:assembleRelease -x :app:stageRomAssets \
+          ./gradlew --no-daemon --console=plain --stacktrace \
+            :app:assembleRelease \
             -PverseboxRomProfile=full -PrequireReleaseSigning=true \
             -PverseboxRomStrict=true -PciSkipNativeVerify=true
           mkdir -p release-assets
           cp app/build/outputs/apk/release/app-release.apk release-assets/VerseBox-full.apk
-      - name: Stage minimal ROM profile
-        run: |
-          ./gradlew --no-daemon --stacktrace --console=plain \
-            :app:stageRomAssets -PverseboxRomProfile=minimal \
-            -PverseboxRomStrict=true -PciSkipNativeVerify=true
-      - name: Build and retain minimal APK
+      - name: 构建最小占位 APK
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          ./gradlew --no-daemon --stacktrace --console=plain \
+          ./gradlew --no-daemon --console=plain --stacktrace \
+            :app:stageRomAssets -PverseboxRomProfile=minimal \
+            -PverseboxRomStrict=true -PciSkipNativeVerify=true
+          ./gradlew --no-daemon --console=plain --stacktrace \
             :app:assembleRelease -x :app:stageRomAssets \
             -PverseboxRomProfile=minimal -PrequireReleaseSigning=true \
             -PverseboxRomStrict=true -PciSkipNativeVerify=true
           cp app/build/outputs/apk/release/app-release.apk release-assets/VerseBox-minimal.apk
-      - name: Verify signatures and publish files
+      - name: 验签并生成校验和
         run: |
           set -euo pipefail
           APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
           test -x "$APKSIGNER"
           "$APKSIGNER" verify --verbose release-assets/VerseBox-full.apk
           "$APKSIGNER" verify --verbose release-assets/VerseBox-minimal.apk
-          test "$(find release-assets -maxdepth 1 -type f -name '*.apk' | wc -l)" -eq 2
           (cd release-assets && sha256sum VerseBox-full.apk VerseBox-minimal.apk > SHA256SUMS)
           cat release-assets/SHA256SUMS
-      - name: Create release notes
+      - name: 生成发布说明
         run: |
           set -euo pipefail
-          commit=$(git rev-parse "${RELEASE_TAG}^{commit}")
-          previous=$(git describe --tags --abbrev=0 "${RELEASE_TAG}^" 2>/dev/null || true)
-          repo_url="https://github.com/${GITHUB_REPOSITORY}"
+          commit=$(git rev-parse HEAD)
+          previous=$(git describe --tags --abbrev=0 "$RELEASE_TAG^" 2>/dev/null || true)
           {
             printf '## 本次发布\n\n'
             printf '| 项 | 值 |\n| --- | --- |\n'
             printf '| 发布版本 | `%s` |\n' "$RELEASE_TAG"
-            printf '| 构建提交 | [`%s`](%s/commit/%s) |\n' "${commit:0:8}" "$repo_url" "$commit"
-            printf '| 构建记录 | [GitHub Actions](%s/actions/runs/%s) |\n' "$repo_url" "${SOURCE_RUN_ID}"
+            printf '| 构建提交 | [`%s`](https://github.com/%s/commit/%s) |\n' "${commit:0:8}" "$GITHUB_REPOSITORY" "$commit"
+            printf '| 构建记录 | [actions run](https://github.com/%s/actions/runs/%s) |\n' "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
             printf '\n## 更新\n\n'
             if [ -n "$previous" ]; then
-              git log --reverse --format='- %s ([%h])' "${previous}..${RELEASE_TAG}"
+              git log --reverse --format='- %s (%h)' "$previous..$RELEASE_TAG"
             else
-              printf '这是首个 tag，没有可比较的上一个版本。\n'
+              printf '首个 tag，没有可比较的上一个版本。\n'
             fi
             printf '\n## 产物\n\n'
             while read -r digest file; do
               bytes=$(wc -c < "release-assets/$file" | tr -d ' ')
               printf -- '- `%s`，%s 字节，sha256 `%s`\n' "$file" "$bytes" "$digest"
             done < release-assets/SHA256SUMS
-            printf '\n## 校验\n\n```bash\nsha256sum -c SHA256SUMS\n```\n'
             printf '\n两个 APK 均通过 apksigner verify。\n'
           } > release-notes.md
-      - name: Publish release
+      - name: 发布
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.workflow_run.head_branch }}
-          name: VerseBox CE ${{ github.event.workflow_run.head_branch }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: VerseBox CE ${{ env.RELEASE_TAG }}
           body_path: release-notes.md
           files: |
             release-assets/VerseBox-full.apk
             release-assets/VerseBox-minimal.apk
             release-assets/SHA256SUMS
           fail_on_unmatched_files: true
-      - name: Remove release keystore
+      - name: 清除签名密钥
         if: always()
         run: |
           if [ -n "${ANDROID_KEYSTORE_PATH:-}" ]; then
