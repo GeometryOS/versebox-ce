@@ -3,7 +3,8 @@ AGP 9.x 自带的 Kotlin 支持取代了 org.jetbrains.kotlin.android 插件，
 因此这里只声明 AGP 与 Compose 编译器插件，不再声明 kotlin-android。
 
 依赖仓库统一在 settings.gradle.kts 声明。
-客体运行库的输入只来自源码构建产物（-PguestRuntimePrepared 或 guest-runtime-a10/prepared-apk），
+客体运行库的输入来自 :app:stageRomAssets 按 app/rom-embed.env 选中的 ROM 包；
+:guest-runtime 模块不再读取 guest-runtime-a10/prepared-apk，
 */
 plugins {
     alias(libs.plugins.agp.app) apply false
@@ -20,7 +21,8 @@ plugins {
  *
  * Robolectric 在测试运行期自己取 android-all-instrumented，默认直连 Maven Central，
  * 既绕开本工程的镜像，也没有重试，CI 上会以 429 直接判失败。
- * 所以这份 SDK 改由 Gradle 解析一次落到 build/robolectric-sdk，测试只读该目录。
+ * 所以这份 SDK 改由 Gradle 解析一次落到 build/robolectric-sdk，测试只读该目录；
+ * 解析走 settings.gradle.kts 里只接管 org.robolectric 的 Maven Central 镜像。
  */
 val robolectricSdkDir = layout.buildDirectory.dir("robolectric-sdk")
 

@@ -54,6 +54,14 @@ dependencyResolutionManagement {
                 }
             }
         }
+        // Robolectric 的 android-all-instrumented 约 190 MB，构建期由 :stageRobolectricSdk
+        // 预置给测试离线读取。它原先走 mavenCentral()，CI 共享出口被 429 打断；
+        // Gradle 对 429 不做跨仓库回退，整条测试 job 直接失败。
+        // 这份镜像与 Maven Central 内容一致，只接管 org.robolectric，不改变其它依赖的解析顺序。
+        maven("https://maven-central.storage-download.googleapis.com/maven2/") {
+            name = "MavenCentralMirrorForRobolectric"
+            content { includeGroup("org.robolectric") }
+        }
         // 顺序说明：miuix-nav-android 这类新构件阿里云同步滞后，官方源在前更稳；
         // 镜像仍保留在后面兜底（google/mavenCentral 拉不到的旧构件走镜像）。
         google()

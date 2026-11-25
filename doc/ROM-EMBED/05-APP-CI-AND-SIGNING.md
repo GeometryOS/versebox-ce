@@ -37,13 +37,19 @@ ROM staging 要访问三个运行时仓库的 Release 资产，只有拿到令�
 
 ## 本机复现
 
-单测（离线，与 app-tests job 同参数）。Robolectric 的 Android SDK 镜像由根构建脚本的 `:stageRobolectricSdk` 预先解析到 `build/robolectric-sdk`，测试只读该目录，运行期不访问 Maven Central：
+单测（离线，与 app-tests job 同参数）。Robolectric 的 Android SDK 镜像由根构建脚本的 `:stageRobolectricSdk` 预先解析到 `build/robolectric-sdk`，测试只读该目录，运行期不访问 Maven Central；构建期的解析走 `settings.gradle.kts` 里只接管 `org.robolectric` 的镜像：
 
     .\gradlew.bat --no-daemon --console=plain :log-audit:test :vm-display:test :vm-rom:test :guest-runtime:testDebugUnitTest :app:testDebugUnitTest -x :app:stageRomAssets -x :app:verifyRomAssets -PciSkipNativeVerify=true
 
 staging（需要三份 dist/<romKey>/ 与本机令牌，来源见 [02-ROM-SOURCE-CONFIG](02-ROM-SOURCE-CONFIG.md)）：
 
     .\gradlew.bat --no-daemon --console=plain :app:stageRomAssets :app:verifyRomAssets -PverseboxRomStrict=true
+
+### 依赖镜像与 429
+
+Robolectric 的 `android-all-instrumented` 约 190 MB，只在构建期由 `:stageRobolectricSdk` 解析一次。`settings.gradle.kts` 在 `google()` 与 `mavenCentral()` 之前放了一个只接管 `org.robolectric` 的 Maven Central 镜像（`maven-central.storage-download.googleapis.com`）。原因是 Maven Central 对共享 runner 出口限流时返回 429，Gradle 对 429 不做跨仓库回退，后面的阿里云镜像根本不会被尝试。内容过滤把影响面限制在 `org.robolectric` 一组，其它依赖的解析顺序不变。
+
+如果 CI 仍报 429，先看失败 URL：仍是 `repo.maven.apache.org` 说明内容过滤没有生效；是镜像地址则说明镜像侧也限流，下一步给 `:stageRobolectricSdk` 加显式重试，不要继续换仓库。成功判据是日志里出现 `Found locally available resource ... storage-download.googleapis.com`。
 
 ## 测试结果怎么读
 

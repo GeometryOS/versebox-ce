@@ -35,6 +35,15 @@ app/rom-embed.env 是本机配置，指向三个独立 guest-runtime 仓库的�
 ## 2026-11-22 追加：参考 APK 兜底已移除
 
 - 根 `build.gradle.kts` 删除 `bootstrapBundledRuntime` / `cleanRuntimeInputs`，不再从 `_bin/A10VM.apk` 解包 `runtime-inputs/`。
-- `:guest-runtime` 只接受 `-PguestRuntimePrepared` 或 `guest-runtime-a10/prepared-apk`；缺失时给出明确错误。
+- 2026-11-22 当时 `:guest-runtime` 只接受 `-PguestRuntimePrepared` 或 `guest-runtime-a10/prepared-apk`；该限制已在 2026-11-26 移除，见本文末节。
 - `:native-display` 只接受 `-PnativeDisplayPrepared`、源码构建产物或旧暂存目录；不再回落到捆绑 APK。
 - 已用 `:app:help` 验证 Gradle 配置通过；未做完整 APK 与真机验证。
+
+## 2026-11-26 追加：实体机构建与 Robolectric 429
+
+- 删除 `:guest-runtime:verifyRuntime` 与 `guest-runtime-a10/prepared-apk` 默认输入。实体机与 Android Studio 的 Debug 构建不再因为缺少该中间目录失败；新格式 ROM 的完整性仍由 `:app:stageRomAssets` 与 `:app:verifyRomAssets` 负责。
+- 旧格式入口保留为显式开关：`-PverseboxLegacyPayload=true` 必须同时给 `-PguestRuntimePrepared=<prepared-apk 目录>`。
+- `settings.gradle.kts` 在官方源之前增加只接管 `org.robolectric` 的 Maven Central 镜像，避开 `:stageRobolectricSdk` 被 429 打断。
+- `-PciSkipNativeVerify` 仍保留给 `:native-display` 的渲染器校验；`:guest-runtime` 已没有可跳过的运行库校验。
+- 本机判据：`:app:help` 配置通过；`:guest-runtime:verifyRuntime` 报 task not found；`:guest-runtime:preBuild --dry-run` 只剩自身；`:stageRobolectricSdk --info` 命中镜像地址并成功。未运行 GitHub Actions，未做完整 `:app:assembleDebug`。
+- 详细记录见 [`_docs/app-ci/03-构建链修复-实体机构建与CI限流.md`](../../_docs/app-ci/03-构建链修复-实体机构建与CI限流.md)。
