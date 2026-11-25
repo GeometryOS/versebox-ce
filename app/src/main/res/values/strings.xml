@@ -6,6 +6,7 @@
 -->
 <resources>
     <string name="app_name">VerseBox</string>
+    <string name="versebox_brand_name">VerseBox</string>
     <string name="app_version_info_format">%1$s %2$s (%3$s)</string>
 
     <!-- 通用 -->

@@ -93,3 +93,4 @@ jobs:
           libs=$(unzip -l "$apk" | grep -c 'lib/arm64-v8a/.*\.so' || true)
           echo "APK 内 .so 数量：$libs"
           test "$libs" -gt 0 || { echo 'APK 的 lib/arm64-v8a 为空，装机必失败' >&2; exit 1; }
+          unzip -l "$apk" | grep -q 'lib/arm64-v8a/libversebox_kanadex_logo.so' || { echo 'APK 缺少Rust品牌Logo动态库' >&2; exit 1; }

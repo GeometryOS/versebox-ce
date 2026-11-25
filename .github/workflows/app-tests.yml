@@ -36,6 +36,8 @@ jobs:
           ./gradlew --no-daemon --console=plain \
             :log-audit:test :vm-display:test :vm-rom:test :guest-runtime:testDebugUnitTest :app:testDebugUnitTest \
             -x :app:stageRomAssets -x :app:verifyRomAssets -PciSkipNativeVerify=true
+      - name: 验证Rust品牌Logo动效
+        run: cargo test --manifest-path app/src/main/rust/Cargo.toml --locked --offline
       # 日志里默认只有失败栈，全绿时一行用例都没有。汇总步骤把每个模块、每个套件的
       # 用例数、耗时与失败用例名打印到 stdout 与 ${GITHUB_STEP_SUMMARY}，Job Summary 页可直接读。
       - name: 汇总测试结果

@@ -94,6 +94,7 @@ import io.a10vm.ui.page.miuix.widgets.MiuixNavigationItemWidget
 import io.a10vm.ui.page.miuix.widgets.MiuixSwitchWidget
 import io.a10vm.ui.page.miuix.widgets.MiuixUpdateDialog
 import io.a10vm.ui.theme.VerseBoxTheme
+import me.kanadex.versebox.brand.VerseBoxLogo
 import io.a10vm.ui.theme.verseBoxMiuixBlurEffect
 import io.a10vm.ui.theme.rememberMiuixBlurBackdrop
 import top.yukonga.miuix.kmp.basic.BasicComponent
@@ -351,22 +352,6 @@ private fun AboutContentBody(
     var blendModeIndex by remember { mutableIntStateOf(0) }
     val currentConfigValue = configEntries.getOrNull(blendModeIndex)?.value ?: emptyList()
 
-    val logoBlend = remember(isDark) {
-        if (isDark) {
-            listOf(
-                BlendColorEntry(Color(0xe6a1a1a1), BlurBlendMode.ColorDodge),
-                BlendColorEntry(Color(0x4de6e6e6), BlurBlendMode.LinearLight),
-                BlendColorEntry(Color(0xff1af500), BlurBlendMode.Lab),
-            )
-        } else {
-            listOf(
-                BlendColorEntry(Color(0xcc4a4a4a), BlurBlendMode.ColorBurn),
-                BlendColorEntry(Color(0xff4f4f4f), BlurBlendMode.LinearLight),
-                BlendColorEntry(Color(0xff1af200), BlurBlendMode.Lab),
-            )
-        }
-    }
-
     // Layout state
     val density = LocalDensity.current
     var logoHeightDp by remember { mutableStateOf(300.dp) }
@@ -408,69 +393,16 @@ private fun AboutContentBody(
                 },
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Box(
-                contentAlignment = Alignment.Center,
+            VerseBoxLogo(
                 modifier = Modifier
-                    .size(88.dp)
-                    .graphicsLayer {
-                        val iconProgress = ((scrollProgressProvider() - 0.35f) / 0.15f).coerceIn(0f, 1f)
-                        alpha = 1 - iconProgress
-                        scaleX = 1 - (iconProgress * 0.05f)
-                        scaleY = 1 - (iconProgress * 0.05f)
-                    },
-            ) {
-                if (backdrop != null) {
-                    Image(
-                        painter = painterResource(id = R.drawable.ic_launcher_monochrome),
-                        modifier = Modifier
-                            .requiredSize(160.dp)
-                            .textureBlur(
-                                backdrop = backdrop,
-                                shape = RoundedCornerShape(16.dp),
-                                blurRadius = 200f,
-                                noiseCoefficient = BlurDefaults.NoiseCoefficient,
-                                colors = BlurColors(blendColors = logoBlend),
-                                contentBlendMode = BlendMode.DstIn,
-                                enabled = blurEnable,
-                            ),
-                        contentDescription = null,
-                    )
-                } else if (uiState.appIcon != null) {
-                    Image(
-                        bitmap = uiState.appIcon,
-                        modifier = Modifier.size(80.dp),
-                        contentDescription = stringResource(id = R.string.app_name),
-                    )
-                }
-            }
-
-            Text(
-                modifier = Modifier
-                    .padding(top = 12.dp, bottom = 5.dp)
+                    .padding(bottom = 5.dp)
                     .graphicsLayer {
                         val projectNameProgress = ((scrollProgressProvider() - 0.20f) / 0.15f).coerceIn(0f, 1f)
                         alpha = 1 - projectNameProgress
                         scaleX = 1 - (projectNameProgress * 0.05f)
                         scaleY = 1 - (projectNameProgress * 0.05f)
-                    }
-                    .then(
-                        if (backdrop != null) {
-                            Modifier.textureBlur(
-                                backdrop = backdrop,
-                                shape = RoundedCornerShape(16.dp),
-                                blurRadius = 150f,
-                                noiseCoefficient = noiseCoefficient,
-                                colors = BlurColors(blendColors = logoBlend),
-                                contentBlendMode = ComposeBlendMode.DstIn,
-                                enabled = blurEnable,
-                            )
-                        } else {
-                            Modifier
-                        },
-                    ),
-                text = stringResource(id = R.string.app_name),
-                fontWeight = FontWeight.Bold,
-                fontSize = 35.sp,
+                    },
+                nameColor = MiuixTheme.colorScheme.onSurface,
             )
 
             Column(

@@ -6,6 +6,7 @@ import com.mikepenz.aboutlibraries.plugin.DuplicateRule
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import java.io.File
+import java.util.Properties
 import java.net.URI
 import java.nio.file.Files
 import java.security.MessageDigest
@@ -97,8 +98,60 @@ android {
         // 内置 ROM 的 zip 已经是 deflate 过的，再压一次只会把构建时间翻倍、体积不变。
         noCompress += listOf("zip")
     }
-    // jniLibs 与 assets 由 :native-display 和 :guest-runtime 两个库模块合并进来，
-    // 这里不再指向任何手工暂存目录。
+    // jniLibs 与 assets 由 :native-display 和 :guest-runtime 两个库模块合并进来。
+    // Rust品牌动态库由本模块任务生成到 build/generated/rust-jniLibs。
+    // Rust sources remain part of :app. The generated JNI library is packaged with the app, never checked in.
+    sourceSets.getByName("main").jniLibs.directories.add(
+        layout.buildDirectory.dir("generated/rust-jniLibs").get().asFile.absolutePath
+    )
+}
+
+val logoRustDir = layout.projectDirectory.dir("src/main/rust")
+val logoRustTarget = "aarch64-linux-android"
+val logoRustTargetDir = layout.buildDirectory.dir("rust-logo-target")
+val logoJniLibDir = layout.buildDirectory.dir("generated/rust-jniLibs/arm64-v8a")
+val installLogoRustTarget = tasks.register<Exec>("installLogoRustTarget") {
+    commandLine("rustup", "target", "add", logoRustTarget)
+}
+val buildVerseBoxLogo = tasks.register<Exec>("buildVerseBoxLogo") {
+    dependsOn(installLogoRustTarget)
+    inputs.files(fileTree(logoRustDir))
+    outputs.file(logoJniLibDir.map { it.file("libversebox_kanadex_logo.so") })
+    workingDir(logoRustDir)
+    doFirst {
+        val sdk = providers.environmentVariable("ANDROID_HOME").orNull
+            ?: providers.environmentVariable("ANDROID_SDK_ROOT").orNull
+            ?: rootProject.file("local.properties").takeIf { it.isFile }?.let { file ->
+                val properties = Properties()
+                file.inputStream().use { input -> properties.load(input) }
+                properties.getProperty("sdk.dir")
+            }
+            ?: throw GradleException("Android SDK path is missing from environment and local.properties")
+        val ndk = providers.environmentVariable("ANDROID_NDK_HOME").orNull
+            ?: providers.environmentVariable("ANDROID_NDK_ROOT").orNull
+            ?: File(sdk, "ndk/29.0.14206865").absolutePath
+        val hostTag = when {
+            System.getProperty("os.name").startsWith("Windows", ignoreCase = true) -> "windows-x86_64"
+            System.getProperty("os.name").startsWith("Mac", ignoreCase = true) -> "darwin-x86_64"
+            else -> "linux-x86_64"
+        }
+        val suffix = if (hostTag.startsWith("windows")) ".cmd" else ""
+        val linker = File(ndk, "toolchains/llvm/prebuilt/$hostTag/bin/aarch64-linux-android35-clang$suffix")
+        if (!linker.isFile) throw GradleException("Rust Android linker is missing: $linker")
+        environment("CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER", linker.absolutePath)
+        environment("CARGO_TARGET_DIR", logoRustTargetDir.get().asFile.absolutePath)
+        commandLine("cargo", "build", "--release", "--target", logoRustTarget, "--manifest-path", logoRustDir.file("Cargo.toml").asFile.absolutePath)
+    }
+    doLast {
+        val source = logoRustTargetDir.get().file("$logoRustTarget/release/libversebox_kanadex_logo.so").asFile
+        if (!source.isFile) throw GradleException("Rust Logo library was not produced: $source")
+        val destination = logoJniLibDir.get().file("libversebox_kanadex_logo.so").asFile
+        destination.parentFile.mkdirs()
+        source.copyTo(destination, overwrite = true)
+    }
+}
+tasks.configureEach {
+    if (name.matches(Regex("merge.*(JniLibFolders|NativeLibs)"))) dependsOn(buildVerseBoxLogo)
 }
 
 val miuixFromLocalRepo = miuixVersion == "0.9.4-292d8ec6"

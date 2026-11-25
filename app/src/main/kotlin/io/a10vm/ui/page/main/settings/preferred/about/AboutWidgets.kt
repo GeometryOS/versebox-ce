@@ -16,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.a10vm.core.device.model.Level
@@ -50,33 +51,28 @@ fun StatusWidget(viewModel: AboutViewModel, useBlur: Boolean) {
             containerColor = backdrop.getMaterial3AppBarColor(),
         ),
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            uiState.appIcon?.let { icon ->
-                Image(
-                    bitmap = icon,
-                    contentDescription = null,
-                    modifier = Modifier.size(48.dp),
-                )
-            }
-            Column(modifier = Modifier.padding(start = 14.dp)) {
-                Text("VerseBox", style = MaterialTheme.typography.titleLarge)
+            me.kanadex.versebox.brand.VerseBoxLogo(nameColor = MaterialTheme.colorScheme.onSurface)
+            Text(
+                modifier = Modifier.fillMaxWidth(),
+                text = levelText + " · " + AppConfig.VERSION_NAME + " (" + AppConfig.VERSION_CODE + ")",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+            if (uiState.hasUpdate) {
                 Text(
-                    levelText + " · " + AppConfig.VERSION_NAME + " (" + AppConfig.VERSION_CODE + ")",
+                    modifier = Modifier.fillMaxWidth(),
+                    text = "有可用更新：" + uiState.remoteVersion,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = MaterialTheme.colorScheme.primary,
+                    textAlign = TextAlign.Center,
                 )
-                if (uiState.hasUpdate) {
-                    Text(
-                        "有可用更新：" + uiState.remoteVersion,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
             }
         }
     }
