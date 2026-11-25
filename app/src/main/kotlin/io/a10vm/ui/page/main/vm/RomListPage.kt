@@ -365,24 +365,24 @@ private fun RomRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            // 选择模式只提供「选择 / 已选」：管理动作回 ROM 管理页做（同上一条）。
-            if (!pickMode && rom.canDelete) {
+            // 选择模式额外提供回填按钮，管理操作仍由同一行模型控制。
+            if (rom.canDelete) {
                 IconButton(onClick = onDelete) {
                     Icon(AppIcons.Delete, contentDescription = "删除这个 ROM", tint = MaterialTheme.colorScheme.error)
                 }
             }
             // 检查与重新解包：内置与本地导入都有（同一条修复链，docs/rom-package/12/03 §5）。
-            if (!pickMode && rom.canCheck) {
+            if (rom.canCheck) {
                 IconButton(onClick = onCheck) {
                     Icon(AppIcons.Active, contentDescription = "检查解包内容")
                 }
             }
-            if (!pickMode && rom.canRepair) {
+            if (rom.canRepair) {
                 IconButton(onClick = onRepair) {
                     Icon(AppIcons.Repack, contentDescription = "从原包重新解包")
                 }
             }
-            if (!pickMode && rom.canClearCache) {
+            if (rom.canClearCache) {
                 IconButton(onClick = onClearCache) {
                     Icon(AppIcons.ClearCache, contentDescription = "清理已解包缓存")
                 }

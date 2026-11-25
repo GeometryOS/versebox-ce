@@ -63,7 +63,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  *
  *  - [RomListMode.Manage]：主页「内置 ROM」进来。可导入 / 删除 / 清理缓存 / 检查 / 新建虚拟机；
  *  - [RomListMode.Pick]：新建虚拟机页「安卓版本」行进来。右下角是「选择 / 已选」，
- *    选中即回上一页（创建流程在那边继续）；这一页就是唯一的选择页。
+ *    选中即回上一页；删除、检查、清理和重新解包仍使用同一组行操作。
  *
  * 组件全部来自 miuix 库（Card / SmallTitle / IconButton / TextButton / Icon / WindowDialog），
  * 页面本身只渲染 [RomItem] 与发 Action（`docs/ui-rework/01`、`02`）。
@@ -291,9 +291,8 @@ private fun MiuixRomCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // 选择模式下不提供删除/检查/清理：这一页只负责"用哪个系统"，
-            // 管理动作回 ROM 管理页做（避免用户在选系统的路上误删包）。
-            if (!pickMode && rom.canDelete) {
+            // 行内管理动作在管理和选择模式下共用；按钮可用性来自ROM行模型。
+            if (rom.canDelete) {
                 IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
                     Icon(
                         imageVector = AppIcons.Delete,
@@ -304,7 +303,7 @@ private fun MiuixRomCard(
             }
             // 检查与重新解包：**内置与本地导入都有**（同一条修复链，docs/rom-package/12/03 §5）。
             // 这里曾经只给本地导入，导致内置包的解包体坏了之后列表里连入口都没有。
-            if (!pickMode && rom.canCheck) {
+            if (rom.canCheck) {
                 IconButton(onClick = onCheck, modifier = Modifier.size(36.dp)) {
                     Icon(
                         imageVector = AppIcons.Active,
@@ -313,7 +312,7 @@ private fun MiuixRomCard(
                     )
                 }
             }
-            if (!pickMode && rom.canRepair) {
+            if (rom.canRepair) {
                 IconButton(onClick = onRepair, modifier = Modifier.size(36.dp)) {
                     Icon(
                         imageVector = AppIcons.Repack,
@@ -322,7 +321,7 @@ private fun MiuixRomCard(
                     )
                 }
             }
-            if (!pickMode && rom.canClearCache) {
+            if (rom.canClearCache) {
                 IconButton(onClick = onClearCache, modifier = Modifier.size(36.dp)) {
                     Icon(
                         imageVector = AppIcons.ClearCache,
