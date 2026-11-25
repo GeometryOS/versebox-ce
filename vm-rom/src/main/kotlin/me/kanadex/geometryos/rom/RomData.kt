@@ -64,6 +64,7 @@ data class RomRow(
     val state: RomState,
     val failure: String? = null,
     val payloadBytes: Long = 0L,
+    val archiveBytes: Long = 0L,
     val extractedBytes: Long = 0L,
     val libMode: String = "apk",
     val installedAt: Long = 0L,

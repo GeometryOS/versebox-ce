@@ -16,7 +16,7 @@ object RomTexts {
         if (value <= 0L) return "0 MB"
         val mb = value / 1024.0 / 1024.0
         if (mb < 1.0) return String.format(Locale.ROOT, "%.0f KB", value / 1024.0)
-        if (mb < 1024.0) return String.format(Locale.ROOT, "%.0f MB", mb)
+        if (mb < 1024.0) return String.format(Locale.ROOT, "%.1f MB", mb)
         return String.format(Locale.ROOT, "%.1f GB", mb / 1024.0)
     }
 
@@ -33,24 +33,18 @@ object RomTexts {
 
     fun description(row: RomRow): String = row.description.ifBlank { row.displayName.ifBlank { row.id } }
 
-    // 一行元信息，写版本、解包占用和被几台虚拟机使用
     fun meta(row: RomRow): String {
-        val parts = mutableListOf<String>()
-        if (row.version.isNotBlank() && row.version != RomKeys.LEGACY_VERSION) parts += row.version
-        when (row.state) {
-            RomState.Ready -> {
-                if (row.source == RomSource.Legacy) parts += "跟随安装包"
-                else if (row.extractedBytes > 0L) parts += "已解包 " + bytes(row.extractedBytes)
-                else parts += "已解包"
-            }
-
-            RomState.Extracting -> parts += "正在解包…"
-            RomState.Pending -> parts += "尚未解包（首次使用会自动解包）"
-            RomState.Failed -> parts += "解包失败"
-            RomState.Missing -> parts += "解包目录已丢失"
+        val archive = if (row.source == RomSource.Legacy) "随安装包"
+        else bytes(row.archiveBytes)
+        val extracted = when (row.state) {
+            RomState.Ready -> if (row.source == RomSource.Legacy) "跟随安装包"
+            else "已解包 " + bytes(row.extractedBytes)
+            RomState.Extracting -> "正在解包"
+            RomState.Pending -> "尚未解包"
+            RomState.Failed -> "解包失败"
+            RomState.Missing -> "解包目录已丢失"
         }
-        if (row.usedByVms > 0) parts += row.usedByVms.toString() + " 台虚拟机使用"
-        return parts.joinToString(" · ")
+        return archive + " / " + extracted + " / " + row.usedByVms + " 台虚拟机使用"
     }
 
     // 来源一个徽章，状态或 API 一个徽章
@@ -81,7 +75,7 @@ object RomTexts {
     // 状态说明，失败时带上原因
     fun stateDetail(row: RomRow): String? = when (row.state) {
         RomState.Ready -> null
-        RomState.Pending -> "点「新建」会自动解包，也可以先在上面导入本地 ROM 包。"
+        RomState.Pending -> null
         RomState.Extracting -> "正在解包，请稍候。"
         RomState.Failed -> row.failure ?: "解包失败，可以清理解包缓存后重试。"
         RomState.Missing -> row.failure ?: "解包目录不存在了，请清理缓存后重新解包。"
@@ -89,7 +83,7 @@ object RomTexts {
 
     // 一行摘要，给只画一行的版式用
     fun summary(row: RomRow): String =
-        (badges(row).map { it.text } + meta(row)).filter { it.isNotBlank() }.joinToString(" · ")
+        (badges(row).map { it.text } + meta(row)).filter { it.isNotBlank() }.joinToString(" / ")
 
     fun item(row: RomRow, selected: Boolean = false): RomItem {
         // 选中只看调用方给的那一行，同 key 的内置与本地是两份
@@ -222,11 +216,11 @@ object RomTexts {
     const val VERSION_CURRENT_BADGE = "正在使用"
 
     fun versionReady(entry: RomVersionEntry): String =
-        "Android " + entry.apiLevel + " · " + sourceLabel(entry.source)
+        "Android " + entry.apiLevel + "，" + sourceLabel(entry.source)
 
     // 还没解包，切换时会先解包
     fun versionNeedsExtract(entry: RomVersionEntry): String =
-        versionReady(entry) + " · 尚未解包（切换时会先解包）"
+        versionReady(entry) + "，尚未解包（切换时会先解包）"
 
 
     const val VERSION_PLACEHOLDER = "占位版本：安装包里只有自述，需要导入完整 ROM 才能使用"
@@ -272,7 +266,7 @@ object RomTexts {
     const val STOP_TIMEOUT = "关机没有在预期时间内结束，版本已经记下来了，下次启动会生效"
 
     fun switched(to: RomVersionEntry): String =
-        "已切换到 " + to.nameWithVersion + " · " + sourceLabel(to.source)
+        "已切换到 " + to.nameWithVersion + "（" + sourceLabel(to.source) + "）"
 
     // 启动被版本闸门拦住时的说明
     fun forcedUpdateMessage(decision: RomVersionDecision): String = when (decision) {

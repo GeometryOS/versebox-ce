@@ -145,6 +145,20 @@ class RomRepository private constructor(context: Context) {
         extractedDirOf(row.key, row.payloadSha256, dirsOnDisk())?.first
             ?: layout.dirFor(row.key, row.payloadSha256)
 
+    private fun archiveBytes(key: String, payloadSha256: String, builtinSizes: Map<String, Long>): Long {
+        val archive = layout.archiveFor(key, payloadSha256)
+        if (archive.isFile) return archive.length()
+        val legacy = layout.archive(key)
+        if (legacy.isFile) return legacy.length()
+        return builtinSizes[key] ?: 0L
+    }
+
+    private fun measuredExtractedBytes(dir: File, key: String, payloadSha256: String): Long {
+        val cacheKey = payloadSha256.ifBlank { key + "#legacy" }
+        store.romExtractedBytes(cacheKey)?.takeIf { it > 0L }?.let { return it }
+        return layout.measuredBytes(dir).also { store.saveRomExtractedBytes(cacheKey, it) }
+    }
+
     // ------------------------------------------------------------------ 扫描
 
     /**
@@ -173,6 +187,7 @@ class RomRepository private constructor(context: Context) {
         // 内置包只解析一次：下面的 DB 行、磁盘行、内置行都要用它。
         val builtin = builtinProperties()
         val builtinProps = builtin.associate { it.properties.key to it.properties }
+        val builtinZipBytes = builtin.associate { it.properties.key to it.archiveBytes }
         val builtinKeys = builtinProps.keys
 
         // 磁盘上现有哪些目录：一次列一遍，下面每一行都用它判"我这_一份_解包了没有"。
@@ -193,7 +208,7 @@ class RomRepository private constructor(context: Context) {
         //    「本地导入同版本后内置 ROM 从列表消失」的根因。
         for (record in runCatching { store.romRows() }.getOrElse { emptyList() }) {
             if (record.source == RomSource.Builtin.name) continue
-            val row = reconcile(record, builtinProps, onDisk)
+            val row = reconcile(record, builtinProps, onDisk, builtinZipBytes)
             rows += row
             mark(record.key, record.payloadSha256)
         }
@@ -218,9 +233,10 @@ class RomRepository private constructor(context: Context) {
             rows += properties.toRow(
                 source = RomSource.Imported,
                 state = if (ready) RomState.Ready else RomState.Failed,
+                extractedBytes = if (ready) measuredExtractedBytes(dir, properties.key, properties.payloadSha256) else 0L,
+                archiveBytes = archiveBytes(properties.key, properties.payloadSha256, builtinZipBytes),
                 failure = if (ready) null else "解包目录不完整，请重新导入",
                 installedAt = dir.lastModified(),
-                // 磁盘上有目录、DB 里没有：原包可能还在 archives 里，能不能重解由此判定。
                 hasArchive = hasArchive(properties.key, properties.payloadSha256) ||
                     properties.key in builtinKeys,
                 extractedSha256 = if (ready) dirSha(dir) else "",
@@ -234,13 +250,15 @@ class RomRepository private constructor(context: Context) {
             val properties = entry.properties
             // 「解包了没有」= 磁盘上存在**这一份内容**的目录（指纹核对），不是"某个 key 的目录在"：
             // 内置 1.0.0 与本地导入 1.0.0 内容不同时，两行各有各的目录，状态必须各算各的。
-            val extracted = !properties.placeholder &&
-                isExtractedOnDisk(properties.key, properties.payloadSha256, onDisk)
+            val extractedDir = extractedDirOf(properties.key, properties.payloadSha256, onDisk)
+                ?.first?.takeIf { !properties.placeholder && layout.isExtracted(it) }
+            val extracted = extractedDir != null
             rows += properties.toRow(
                 source = RomSource.Builtin,
                 state = if (extracted) RomState.Ready else RomState.Pending,
+                extractedBytes = extractedDir?.let { measuredExtractedBytes(it, properties.key, properties.payloadSha256) } ?: 0L,
+                archiveBytes = entry.archiveBytes,
                 extractedSha256 = if (extracted) properties.payloadSha256 else "",
-                // 内置包的原包就是 APK 里那个 zip；占位包没有 payload，也就没有可重解的来源。
                 hasArchive = !properties.placeholder,
             )
         }
@@ -288,7 +306,7 @@ class RomRepository private constructor(context: Context) {
     }
 
     /** 内置包（自述 + 包文件名）：索引优先，索引不存在时逐个读 zip 自述。 */
-    private data class Builtin(val fileName: String, val properties: RomProperties)
+    private data class Builtin(val fileName: String, val properties: RomProperties, val archiveBytes: Long)
 
     private fun builtinProperties(): List<Builtin> {
         val names = runCatching { assets.list(RomStorage.ASSET_DIR)?.toList().orEmpty() }
@@ -296,27 +314,29 @@ class RomRepository private constructor(context: Context) {
         val zips = names.filter { it.endsWith(".zip", ignoreCase = true) }
         if (zips.isEmpty()) return emptyList()
         readIndex()?.let { indexed ->
-            val known = indexed.filter { it.first in zips }
+            val known = indexed.filter { it.fileName in zips }
             // 索引里有、目录里的 zip 也在：直接用。索引缺失的 zip 再单独读自述（新增的包还没重建索引）。
             if (known.isNotEmpty()) {
-                val missing = zips.filter { name -> known.none { it.first == name } }
-                return known.map { Builtin(it.first, it.second) } + missing.mapNotNull { readAssetQuietly(it) }
+                val missing = zips.filter { name -> known.none { it.fileName == name } }
+                return known + missing.mapNotNull { readAssetQuietly(it) }
             }
         }
         return zips.mapNotNull { readAssetQuietly(it) }
     }
 
     private fun readAssetQuietly(name: String): Builtin? = runCatching {
-        Builtin(name, RomPackage.readFromAsset(assets, RomStorage.ASSET_DIR + "/" + name))
+        val path = RomStorage.ASSET_DIR + "/" + name
+        val archiveBytes = runCatching { assets.openFd(path).length }.getOrDefault(0L)
+        Builtin(name, RomPackage.readFromAsset(assets, path), archiveBytes)
     }.getOrNull()
 
     /** 读构建期索引（`assets/kanadex-rom/index.json`）。缺失或损坏返回 null（退回读 zip）。 */
-    private fun readIndex(): List<Pair<String, RomProperties>>? = runCatching {
+    private fun readIndex(): List<Builtin>? = runCatching {
         val text = assets.open(RomStorage.ASSET_DIR + "/" + RomStorage.INDEX_NAME)
             .use { it.readBytes().toString(Charsets.UTF_8) }
         val root = JSONObject(text)
         val entries = root.optJSONArray("entries") ?: return@runCatching null
-        val result = mutableListOf<Pair<String, RomProperties>>()
+        val result = mutableListOf<Builtin>()
         for (index in 0 until entries.length()) {
             val item = entries.getJSONObject(index)
             val file = item.optString("file")
@@ -340,7 +360,7 @@ class RomRepository private constructor(context: Context) {
             )
             // 索引也是数据：字段不合法就当没有索引（构建期已经校验过，这里只防手改）。
             if (!RomKeys.isValidId(properties.id) || !RomKeys.isValidVersion(properties.romVersion)) continue
-            result += file to properties
+            result += Builtin(file, properties, item.optLong("zipBytes"))
         }
         result
     }.getOrNull()
@@ -378,11 +398,13 @@ class RomRepository private constructor(context: Context) {
         record: RomInstallRow,
         builtinProps: Map<String, RomProperties> = emptyMap(),
         onDisk: Map<String, File> = dirsOnDisk(),
+        builtinZipBytes: Map<String, Long> = emptyMap(),
     ): RomRow {
         val source = runCatching { RomSource.valueOf(record.source) }.getOrDefault(RomSource.Imported)
         val stored = runCatching { RomState.valueOf(record.state) }.getOrDefault(RomState.Pending)
         val found = extractedDirOf(record.key, record.payloadSha256, onDisk)
         val extractedSha = found?.second.orEmpty()
+        val extractedDir = found?.first?.takeIf { layout.isExtracted(it) }
         val exists = found != null &&
             (record.payloadSha256.isEmpty() || extractedSha.isEmpty() || extractedSha == record.payloadSha256)
         val state = when {
@@ -391,13 +413,21 @@ class RomRepository private constructor(context: Context) {
             stored == RomState.Ready -> RomState.Ready
             else -> stored
         }
+        val extractedBytes = if (state == RomState.Ready && extractedDir != null) {
+            record.extractedBytes.takeIf { it > 0L }
+                ?: measuredExtractedBytes(extractedDir, record.key, record.payloadSha256)
+        } else {
+            0L
+        }
         return RomRow(
             key = record.key, id = record.id, version = record.version,
             displayName = record.displayName, description = record.description,
             androidVersion = record.androidVersion, apiLevel = record.apiLevel,
             source = source, state = state, failure = record.failure,
             payloadBytes = record.payloadBytes,
-            extractedBytes = if (state == RomState.Ready) record.extractedBytes else 0L,
+            archiveBytes = if (record.archiveBytes > 0L) record.archiveBytes
+                else archiveBytes(record.key, record.payloadSha256, builtinZipBytes),
+            extractedBytes = extractedBytes,
             libMode = record.libMode, installedAt = record.installedAt,
             lastUsedAt = record.lastUsedAt,
             payloadSha256 = record.payloadSha256,
@@ -427,13 +457,16 @@ class RomRepository private constructor(context: Context) {
 
     private fun importFromUriLocked(uri: Uri, progress: (RomProgress) -> Unit): Outcome {
         val started = System.currentTimeMillis()
+        val events = mutableListOf<String>()
         val temp = File(app.cacheDir, "rom-import-" + started + ".zip")
         var key: String? = null
         var romName: String? = null
         var apiLevel = 0
         try {
             val zipHash = copyUri(uri, temp)
+            events += "SAF文件复制完成 bytes=${temp.length()} sha256=$zipHash"
             val properties = RomPackage.read(temp)
+            events += "ROM自述和L1结构校验通过 key=${properties.key}"
             key = properties.key
             romName = properties.name
             apiLevel = properties.apiLevel
@@ -445,7 +478,7 @@ class RomRepository private constructor(context: Context) {
             ) {
                 temp.delete()
                 record(RecordKind.ROM_IMPORT, RecordStatus.SUCCESS, properties.key, properties.name,
-                    properties.apiLevel, "已在列表里，没有重复解包：" + properties.key, started)
+                    properties.apiLevel, "已在列表里，没有重复解包：" + properties.key, started, events)
                 return Outcome(reconcile(existing), duplicate = true)
             }
             if (!layout.isValidKey(properties.key)) {
@@ -465,11 +498,13 @@ class RomRepository private constructor(context: Context) {
                 // 同内容已经在 archives 里：不重复写（R2：同一份内容不许存两份）。
                 temp.delete()
             }
+            events += "不可变原包已保存 path=${archive.name} bytes=${archive.length()}"
             store.saveRomRow(
                 properties.toRecord(
                     source = RomSource.Imported,
                     state = RomState.Extracting,
                     zipSha256 = zipHash,
+                    archiveBytes = archive.length(),
                     installedAt = System.currentTimeMillis(),
                 ),
             )
@@ -477,13 +512,15 @@ class RomRepository private constructor(context: Context) {
                 "romKey" to properties.key,
                 "zip_sha256" to zipHash,
                 "bytes" to archive.length(),
-                "originUri" to uri.toString(),
+                "originScheme" to (uri.scheme ?: "unknown"),
             ))
             val dir = extract(archive, properties, progress)
-            val extractedBytes = layout.measuredBytes(dir)
+            val extractedBytes = measuredExtractedBytes(dir, properties.key, properties.payloadSha256)
+            val archiveBytes = archive.length()
             val row = properties.toRow(
                 source = RomSource.Imported,
                 state = RomState.Ready,
+                archiveBytes = archiveBytes,
                 extractedBytes = extractedBytes,
                 installedAt = System.currentTimeMillis(),
                 hasArchive = true,
@@ -493,6 +530,7 @@ class RomRepository private constructor(context: Context) {
                 state = RomState.Ready,
                 extractedBytes = extractedBytes,
                 zipSha256 = zipHash,
+                archiveBytes = archiveBytes,
                 installedAt = System.currentTimeMillis(),
             ))
             audit("rom_extracted", mapOf(
@@ -500,11 +538,13 @@ class RomRepository private constructor(context: Context) {
                 "files" to countFiles(dir),
                 "bytes" to extractedBytes,
             ))
+            events += "L2解包并逐项校验完成 files=${countFiles(dir)} extracted_bytes=$extractedBytes"
+            events += "rom_install状态写回并读回成功 archive_bytes=$archiveBytes"
             record(RecordKind.ROM_IMPORT, RecordStatus.SUCCESS, properties.key, properties.name,
                 properties.apiLevel,
                 "已导入 " + properties.key + "（解包 " + RomTexts.bytes(extractedBytes) +
-                    "，包 " + RomTexts.bytes(archive.length()) + "）",
-                started)
+                    "，包 " + RomTexts.bytes(archiveBytes) + "）",
+                started, events)
             bump()
             return Outcome(row, duplicate = false)
         } catch (failure: Throwable) {
@@ -515,7 +555,7 @@ class RomRepository private constructor(context: Context) {
                 audit("rom_failed", mapOf("romKey" to romKey, "reason" to reason))
             }
             record(RecordKind.ROM_IMPORT, RecordStatus.FAILED, key, romName, apiLevel,
-                "导入失败：" + reason, started)
+                "导入失败：" + reason, started, events, failure)
             bump()
             throw failure
         }
@@ -558,36 +598,64 @@ class RomRepository private constructor(context: Context) {
         progress: (RomProgress) -> Unit,
         isCancelled: () -> Boolean,
     ): RomRow {
+        val started = System.currentTimeMillis()
         val existing = rowFor(RomRef(key, null, payloadSha256))
-        val archive = resolveArchive(key, payloadSha256.ifEmpty { existing?.payloadSha256.orEmpty() })
-            ?: throw RomException("ROM 缺失：" + key + "（安装包里没有这个 ROM，请重新导入）")
         val problems = existing?.let { payloadProblems(it) }.orEmpty()
+        val patchableDir = existing?.let { row ->
+            layout.dirFor(row.key, row.payloadSha256).takeIf { layout.isExtracted(it) }
+        }
+        val operationKind = when {
+            existing == null || existing.state == RomState.Pending -> RecordKind.ROM_EXTRACT
+            patchableDir != null -> RecordKind.ROM_REPAIR
+            else -> RecordKind.ROM_REEXTRACT
+        }
+        val archive = try {
+            resolveArchive(key, payloadSha256.ifEmpty { existing?.payloadSha256.orEmpty() })
+                ?: throw RomException("ROM 缺失：" + key + "（安装包里没有这个 ROM，请重新导入）")
+        } catch (failure: Throwable) {
+            record(operationKind, RecordStatus.FAILED, key, existing?.displayName, existing?.apiLevel ?: 0,
+                "ROM原包不可用：" + (failure.message ?: failure.javaClass.simpleName), started,
+                listOf("查找不可变ROM原包失败"), failure)
+            throw failure
+        }
         if (existing != null && existing.isReady && problems.isEmpty()) return existing
 
-        val started = System.currentTimeMillis()
-        val properties = RomPackage.read(archive)
+        val properties = try {
+            RomPackage.read(archive)
+        } catch (failure: Throwable) {
+            record(operationKind, RecordStatus.FAILED, key, existing?.displayName, existing?.apiLevel ?: 0,
+                "ROM原包自述读取失败：" + (failure.message ?: failure.javaClass.simpleName), started,
+                listOf("读取原包自述和清单失败"), failure)
+            throw failure
+        }
         val source = existing?.source ?: RomSource.Imported
         // 内置包不写 DB：它的"在不在、解没解"由 APK 索引 + 目录推出，写进去就会和本地行抢同一个 rom_key。
         val tracked = source != RomSource.Builtin
         val installedAt = existing?.installedAt?.takeIf { it > 0L } ?: started
+        val events = mutableListOf("原包定位成功，bytes=" + archive.length(), "解包前检查发现缺失条目=" + problems.size)
         if (tracked) {
             store.saveRomRow(properties.toRecord(
                 source = source,
                 state = RomState.Extracting,
                 zipSha256 = runCatching { RomHash.fileSha256(archive) }.getOrNull(),
+                archiveBytes = archive.length(),
                 installedAt = installedAt,
             ))
+            events += "rom_install状态写为extracting"
+        } else {
+            events += "内置ROM来源确认，保持APK asset原包不变"
         }
         bump()
         try {
             val dir = extract(archive, properties, progress, isCancelled)
-            val extractedBytes = layout.measuredBytes(dir)
+            val extractedBytes = measuredExtractedBytes(dir, key, properties.payloadSha256)
             if (tracked) {
                 store.saveRomRow(properties.toRecord(
                     source = source,
                     state = RomState.Ready,
                     extractedBytes = extractedBytes,
                     zipSha256 = runCatching { RomHash.fileSha256(archive) }.getOrNull(),
+                    archiveBytes = archive.length(),
                     installedAt = installedAt,
                 ))
             }
@@ -611,16 +679,24 @@ class RomRepository private constructor(context: Context) {
                     "took_ms" to (System.currentTimeMillis() - started),
                 ))
             }
+            events += "L2逐项校验完成 files=" + countFiles(dir) + " extracted_bytes=" + extractedBytes
+            events += if (problems.isEmpty()) "ROM首次解包完成" else "派生ROM缺失内容已从原包恢复"
+            record(operationKind, RecordStatus.SUCCESS, key, properties.name, properties.apiLevel,
+                if (problems.isEmpty()) "ROM解包完成：" + key else "ROM自动修复完成：" + key, started, events)
             bump()
             return existing?.let { rowById(it.rowId) }
-                ?: properties.toRow(source, RomState.Ready, extractedBytes, hasArchive = true)
+                ?: properties.toRow(source, RomState.Ready, extractedBytes, archiveBytes = archive.length(), hasArchive = true)
         } catch (cancel: RomCancelled) {
+            record(operationKind, RecordStatus.CANCELLED, key, properties.name, properties.apiLevel,
+                "ROM操作已取消：" + key, started, events + "用户取消解包")
             bump()
             throw cancel
         } catch (failure: Throwable) {
             val reason = failure.message ?: failure.javaClass.simpleName
             if (tracked) store.updateRomState(key, RomState.Failed.name, reason)
             audit("rom_failed", mapOf("romKey" to key, "reason" to reason))
+            record(operationKind, RecordStatus.FAILED, key, properties.name, properties.apiLevel,
+                "ROM解包或修复失败：" + reason, started, events + "原包解包或清单校验失败", failure)
             bump()
             throw failure
         }
@@ -735,27 +811,33 @@ class RomRepository private constructor(context: Context) {
      * 不动文件、不改 DB（只写一条审计与一条索引记录）。
      */
     fun checkRom(rowId: String): RomCheckReport {
-        val row = rowById(rowId) ?: throw RomException("没有这个 ROM：" + rowId)
-        val key = row.key
-        val (total, problems) = checkScan(row)
-        val canRepair = hasArchive(key, row.payloadSha256)
-        val report = RomCheckReport(key = key, total = total, problems = problems, canRepair = canRepair)
-        audit("rom_checked", mapOf(
-            "romKey" to key,
-            "healthy" to report.healthy,
-            "problems" to problems.size,
-            "canRepair" to canRepair,
-        ))
-        // 检查本身是一次用户动作，所以无论结论如何，动作是"完成了"。
-        // 结论写进 detail：把"检查成功"与"ROM 健康"混成一个状态，会让记录中心说谎。
-        val detail = if (report.healthy) {
-            RomTexts.checkHealthy(report) + "（" + RomTexts.titleWithVersion(row) + "）"
-        } else {
-            RomTexts.checkProblems(report) + (if (canRepair) "（可以重新解包修复）" else "（原包不在了）")
+        val started = System.currentTimeMillis()
+        var row: RomRow? = null
+        try {
+            row = rowById(rowId) ?: throw RomException("没有这个 ROM：" + rowId)
+            val (total, problems) = checkScan(row)
+            val canRepair = hasArchive(row.key, row.payloadSha256)
+            val report = RomCheckReport(row.key, total, problems, canRepair)
+            audit("rom_checked", mapOf("romKey" to row.key, "healthy" to report.healthy, "problems" to problems.size, "canRepair" to canRepair))
+            val detail = if (report.healthy) {
+                RomTexts.checkHealthy(report) + "（" + RomTexts.titleWithVersion(row) + "）"
+            } else {
+                RomTexts.checkProblems(report) + (if (canRepair) "（可以重新解包修复）" else "（原包不在了）")
+            }
+            record(
+                RecordKind.ROM_CHECK, RecordStatus.SUCCESS, row.key, row.displayName, row.apiLevel,
+                detail, started,
+                listOf("读取解包清单并检查 " + total + " 个条目", "发现缺失或尺寸不符 " + problems.size + " 项", "原包可恢复=" + canRepair),
+            )
+            return report
+        } catch (failure: Exception) {
+            record(
+                RecordKind.ROM_CHECK, RecordStatus.FAILED, row?.key ?: rowId, row?.displayName, row?.apiLevel ?: 0,
+                "ROM检查失败：" + (failure.message ?: failure.javaClass.simpleName), started,
+                listOf("ROM读取、清单解析或文件检查失败"), failure,
+            )
+            throw failure
         }
-        record(RecordKind.ROM_CHECK, RecordStatus.SUCCESS, key, row.displayName, row.apiLevel,
-            detail, System.currentTimeMillis())
-        return report
     }
 
     /**
@@ -859,7 +941,8 @@ class RomRepository private constructor(context: Context) {
         ))
         record(RecordKind.ROM_DELETE, RecordStatus.SUCCESS, key, row.displayName, row.apiLevel,
             "已删除 " + key + "（释放 " + RomTexts.bytes(freed) + "，" +
-                row.usedByVms + " 台虚拟机受影响）", started)
+                row.usedByVms + " 台虚拟机受影响）", started,
+            listOf("删除解包目录及匹配的ZIP原包，freed_bytes=" + freed, "rom_install数据库登记删除并扫描刷新"))
         bump()
         return row.copy(state = RomState.Missing, extractedBytes = 0L)
     }
@@ -872,13 +955,13 @@ class RomRepository private constructor(context: Context) {
     private fun clearCacheLocked(rowId: String): RomRow {
         val started = System.currentTimeMillis()
         val row = rowById(rowId) ?: run {
-            record(RecordKind.ROM_DELETE, RecordStatus.FAILED, rowId, null, 0,
+            record(RecordKind.ROM_CLEAR_CACHE, RecordStatus.FAILED, rowId, null, 0,
                 "清理缓存失败：没有这个 ROM（" + rowId + "）", started)
             throw RomException("没有这个 ROM：" + rowId)
         }
         val key = row.key
         if (!row.canClearCache) {
-            record(RecordKind.ROM_DELETE, RecordStatus.FAILED, key, row.displayName, row.apiLevel,
+            record(RecordKind.ROM_CLEAR_CACHE, RecordStatus.FAILED, key, row.displayName, row.apiLevel,
                 "清理缓存失败：" + RomTexts.titleWithVersion(row) + " 没有可清理的解包缓存", started)
             throw RomException("这个 ROM 没有可清理的缓存：" + RomTexts.titleWithVersion(row))
         }
@@ -893,8 +976,9 @@ class RomRepository private constructor(context: Context) {
             "freed_bytes" to freed,
             "affectedVms" to row.usedByVms,
         ))
-        record(RecordKind.ROM_DELETE, RecordStatus.SUCCESS, key, row.displayName, row.apiLevel,
-            "已清理 " + key + " 的解包缓存（释放 " + RomTexts.bytes(freed) + "）", started)
+        record(RecordKind.ROM_CLEAR_CACHE, RecordStatus.SUCCESS, key, row.displayName, row.apiLevel,
+            "已清理 " + key + " 的解包缓存（释放 " + RomTexts.bytes(freed) + "）", started,
+            listOf("删除解包目录，freed_bytes=" + freed, "rom_install状态更新为pending并清空extracted_bytes"))
         bump()
         return row.copy(state = RomState.Pending, extractedBytes = 0L)
     }
@@ -1025,12 +1109,6 @@ class RomRepository private constructor(context: Context) {
         AuditBootstrap.emit(app, kind, fields)
     }
 
-    /**
-     * 写一条 ROM 动作的记录（记录中心可见）。
-     *
-     * ROM 动作不属于某台虚拟机的运行过程，所以 vmId 固定为 rom、且**不归档**；
-     * 审计通道（audit.log）另有 rom_* 事件，两者各管一头。
-     */
     private fun record(
         kind: RecordKind,
         status: RecordStatus,
@@ -1039,6 +1117,8 @@ class RomRepository private constructor(context: Context) {
         apiLevel: Int,
         detail: String,
         startedAt: Long,
+        events: List<String> = emptyList(),
+        failure: Throwable? = null,
     ) {
         RecordCollector.recordMeta(
             context = app,
@@ -1051,6 +1131,8 @@ class RomRepository private constructor(context: Context) {
             status = status,
             detail = detail,
             startedAt = startedAt,
+            operationEvents = events,
+            failure = failure,
         )
     }
 }
@@ -1060,6 +1142,7 @@ internal fun RomProperties.toRow(
     source: RomSource,
     state: RomState,
     extractedBytes: Long = 0L,
+    archiveBytes: Long = 0L,
     failure: String? = null,
     installedAt: Long = 0L,
     hasArchive: Boolean = false,
@@ -1076,6 +1159,7 @@ internal fun RomProperties.toRow(
     state = state,
     failure = failure,
     payloadBytes = payloadBytes,
+    archiveBytes = archiveBytes,
     extractedBytes = extractedBytes,
     libMode = libMode,
     installedAt = installedAt,
@@ -1091,6 +1175,7 @@ internal fun RomProperties.toRecord(
     state: RomState,
     extractedBytes: Long = 0L,
     zipSha256: String? = null,
+    archiveBytes: Long = 0L,
     installedAt: Long = 0L,
 ): RomInstallRow = RomInstallRow(
     key = key,
@@ -1104,6 +1189,7 @@ internal fun RomProperties.toRecord(
     zipSha256 = zipSha256,
     payloadSha256 = payloadSha256,
     payloadBytes = payloadBytes,
+    archiveBytes = archiveBytes,
     extractedBytes = extractedBytes,
     libMode = libMode,
     state = state.name,

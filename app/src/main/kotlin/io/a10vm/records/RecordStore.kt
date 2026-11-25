@@ -23,10 +23,11 @@ class RecordStore private constructor(context: Context) {
          * 2：新增 child_limit_state（子进程限制检测结论），见 [saveLimitState]。
          * 3：新增 rom_install（ROM 登记，见 docs/rom-package/06 §4）——**只加表，不 DROP**。
          */
-        private const val DB_VERSION = 3
+        private const val DB_VERSION = 4
         private const val TABLE = "vm_record"
         private const val TABLE_LIMIT = "child_limit_state"
         private const val TABLE_ROM = "rom_install"
+        private const val TABLE_ROM_SIZE = "rom_extract_size"
         private const val MAX_ROWS = 500
 
         @Volatile private var instance: RecordStore? = null
@@ -77,6 +78,7 @@ class RecordStore private constructor(context: Context) {
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_record_status ON $TABLE (status, started_at DESC)")
             createLimitTable(db)
             createRomTable(db)
+            createRomSizeTable(db)
         }
 
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -84,6 +86,8 @@ class RecordStore private constructor(context: Context) {
             // 只加表，不重建、不清空既有记录（数据不可再生）。两条都是 IF NOT EXISTS，可重复执行。
             createLimitTable(db)
             if (oldVersion < 3) createRomTable(db)
+            if (oldVersion == 3) db.execSQL("ALTER TABLE $TABLE_ROM ADD COLUMN archive_bytes INTEGER NOT NULL DEFAULT 0")
+            if (oldVersion < 4) createRomSizeTable(db)
         }
 
         /**
@@ -107,6 +111,7 @@ class RecordStore private constructor(context: Context) {
                     zip_sha256      TEXT,
                     payload_sha256  TEXT NOT NULL,
                     payload_bytes   INTEGER NOT NULL DEFAULT 0,
+                    archive_bytes   INTEGER NOT NULL DEFAULT 0,
                     extracted_bytes INTEGER NOT NULL DEFAULT 0,
                     lib_mode        TEXT NOT NULL DEFAULT 'apk',
                     state           TEXT NOT NULL,
@@ -117,6 +122,12 @@ class RecordStore private constructor(context: Context) {
                 """.trimIndent(),
             )
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_rom_id ON $TABLE_ROM (rom_id, installed_at DESC)")
+        }
+
+        private fun createRomSizeTable(db: SQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS $TABLE_ROM_SIZE (payload_sha256 TEXT PRIMARY KEY NOT NULL, extracted_bytes INTEGER NOT NULL, measured_at INTEGER NOT NULL)",
+            )
         }
 
         /** 单行 KV：id 恒为 1，写入用 REPLACE。 */
@@ -258,6 +269,26 @@ class RecordStore private constructor(context: Context) {
         bump()
     }
 
+    fun romExtractedBytes(payloadSha256: String): Long? = lock.withLock {
+        if (payloadSha256.isBlank()) return@withLock null
+        db().query(TABLE_ROM_SIZE, arrayOf("extracted_bytes"), "payload_sha256=?", arrayOf(payloadSha256), null, null, null)
+            .use { cursor -> if (cursor.moveToFirst()) cursor.getLong(0) else null }
+    }
+
+    fun saveRomExtractedBytes(payloadSha256: String, extractedBytes: Long) = lock.withLock {
+        if (payloadSha256.isBlank() || extractedBytes <= 0L) return@withLock
+        db().insertWithOnConflict(
+            TABLE_ROM_SIZE,
+            null,
+            ContentValues().apply {
+                put("payload_sha256", payloadSha256)
+                put("extracted_bytes", extractedBytes)
+                put("measured_at", System.currentTimeMillis())
+            },
+            SQLiteDatabase.CONFLICT_REPLACE,
+        )
+    }
+
     /** 只更新状态机与大小的列，不动 rom_key / payload 哈希（那两项是身份）。 */
     fun updateRomState(
         key: String,
@@ -293,6 +324,7 @@ class RecordStore private constructor(context: Context) {
         zipSha256 = getColumnIndexOrThrow("zip_sha256").let { if (isNull(it)) null else getString(it) },
         payloadSha256 = getString(getColumnIndexOrThrow("payload_sha256")),
         payloadBytes = getLong(getColumnIndexOrThrow("payload_bytes")),
+        archiveBytes = getLong(getColumnIndexOrThrow("archive_bytes")),
         extractedBytes = getLong(getColumnIndexOrThrow("extracted_bytes")),
         libMode = getString(getColumnIndexOrThrow("lib_mode")),
         state = getString(getColumnIndexOrThrow("state")),
@@ -313,6 +345,7 @@ class RecordStore private constructor(context: Context) {
         put("zip_sha256", zipSha256)
         put("payload_sha256", payloadSha256)
         put("payload_bytes", payloadBytes)
+        put("archive_bytes", archiveBytes)
         put("extracted_bytes", extractedBytes)
         put("lib_mode", libMode)
         put("state", state)
@@ -391,6 +424,7 @@ data class RomInstallRow(
     val zipSha256: String? = null,
     val payloadSha256: String,
     val payloadBytes: Long = 0L,
+    val archiveBytes: Long = 0L,
     val extractedBytes: Long = 0L,
     val libMode: String = "apk",
     val state: String,
