@@ -45,6 +45,21 @@ staging（需要三份 dist/<romKey>/ 与本机令牌，来源见 [02-ROM-SOURCE
 
     .\gradlew.bat --no-daemon --console=plain :app:stageRomAssets :app:verifyRomAssets -PverseboxRomStrict=true
 
+## 测试结果怎么读
+
+| 位置 | 内容 | 来源 |
+| --- | --- | --- |
+| Job 日志 | 每条用例一行 `类名 > 方法 PASSED/FAILED`，失败附完整栈与原因 | 根 build.gradle.kts 的 testLogging |
+| Job Summary | 每个模块的套件数、用例数、通过、失败、错误、跳过、耗时，以及失败用例清单 | 汇总步骤写入 GITHUB_STEP_SUMMARY |
+| Checks 页 | 按套件展开的用例列表与行内注解 | dorny/test-reporter 读取 JUnit XML |
+| artifact | `build/reports/tests/**` 的 HTML 报告，以及原始 XML | 上传步骤 |
+
+JUnit XML 是给机器读的中间格式：浏览器打开只显示 "This XML file does not appear to have any style information"，因为 XML 没有附带样式表。这不是测试失败，也不是上传损坏。要读人话就看 Job Summary、Job 日志里逐条 PASSED 行，或下载 artifact 里的 HTML 报告。
+
+testLogging 只在根 build.gradle.kts 配一次，五个模块共用；新模块不需要重复配置，也不会出现"有的模块有逐条输出、有的没有"。
+
+本机验证：`:vm-display:test --rerun-tasks` 打印四行 `DisplayPolicyTest > 方法 PASSED`；用 app-test-results 的 18 个 XML 跑汇总脚本，得到 5 个模块共 94 项、13.2 s 的表格。Checks 步骤依赖 Actions 的 checks: write，本机无法验证。
+
 JKS 不入库。若 Miuix GitHub Packages 依赖仍为私有包，还需在包仓库设置中授权 VerseBox 仓库读取；Actions job 使用 packages: read 与 GITHUB_TOKEN。将 JKS 原文件 Base64 编码后设置为仓库或环境级 Actions secret `ANDROID_KEYSTORE_BASE64`；同时设置 `ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS` 与 `ANDROID_KEY_PASSWORD`。secret 只能由 release job 读取。建议用 PowerShell 编码，不把明文或编码结果写入仓库：
 
 ```powershell

@@ -12,3 +12,20 @@ plugins {
     // 路由必须是 @Serializable：miuix-nav 的返回栈 Saver 会把它序列化成 JSON（InstallerX 同款）
     alias(libs.plugins.kotlin.serialization) apply false
 }
+
+/*
+ * Test 任务默认只在失败时打栈，全绿的运行一行用例名都不打，日志里看不出测了什么。
+ * 逐条用例输出统一在这里打开，避免五个模块各写一遍、各写走样。
+ * XML 与 HTML 报告仍然照常生成：XML 给 CI 汇总，HTML 给人看细节。
+ */
+subprojects {
+    tasks.withType<Test>().configureEach {
+        testLogging {
+            events("passed", "skipped", "failed")
+            exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+            showExceptions = true
+            showCauses = true
+            showStackTraces = true
+        }
+    }
+}
