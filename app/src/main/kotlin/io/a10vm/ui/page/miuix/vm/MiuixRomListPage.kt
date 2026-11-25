@@ -137,6 +137,7 @@ fun MiuixRomListPage(useBlur: Boolean, mode: RomListMode = RomListMode.Manage) {
                 MiuixRomCard(
                     rom = rom,
                     pickMode = state.isPick,
+                    onOpen = { navigator.push(Route.RomDetail(rom.rowId, state.isPick)) },
                     highlight = state.highlightKey == rom.key,
                     onHighlightFinished = { viewModel.dispatch(RomListAction.ConsumeFocus) },
                     onDelete = { viewModel.dispatch(RomListAction.RequestDelete(rom.rowId)) },
@@ -210,6 +211,7 @@ fun MiuixRomListPage(useBlur: Boolean, mode: RomListMode = RomListMode.Manage) {
 private fun MiuixRomCard(
     rom: RomItem,
     pickMode: Boolean,
+    onOpen: () -> Unit,
     onDelete: () -> Unit,
     onCheck: () -> Unit,
     onRepair: () -> Unit,
@@ -228,11 +230,12 @@ private fun MiuixRomCard(
         }
         onHighlightFinished()
     }
-    // 非整卡可点（操作在行内按钮上），所以用库的非点击态 Card 重载。
     Card(
         modifier = Modifier
             .miuixCardInset()
             .graphicsLayer { alpha = pulse.value },
+        onClick = onOpen,
+        showIndication = true,
     ) {
         Column(
             modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 12.dp),

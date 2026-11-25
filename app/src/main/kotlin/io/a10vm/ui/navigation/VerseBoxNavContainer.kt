@@ -229,6 +229,20 @@ fun VerseBoxNavContainer(uiState: ThemeState, mainContent: @Composable () -> Uni
                     }
                 }
             }
+            entry<Route.RomDetail>(swipeDismiss = swipeBackDirection) { key ->
+                VerseBoxNavEntry(interceptPredictiveBack, onBack) {
+                    val mode = if (key.pickForCreate) {
+                        me.kanadex.geometryos.rom.RomListMode.Pick
+                    } else {
+                        me.kanadex.geometryos.rom.RomListMode.Manage
+                    }
+                    if (uiState.useMiuix) {
+                        io.a10vm.ui.page.miuix.vm.MiuixRomDetailPage(key.rowId, mode, useBlur)
+                    } else {
+                        io.a10vm.ui.page.main.vm.RomDetailPage(key.rowId, mode, useBlur)
+                    }
+                }
+            }
             // ROM 版本管理：列表型单选页，保留侧滑返回（docs/rom-package/14-版本管理/01 §2）。
             entry<Route.VmRomVersion>(swipeDismiss = swipeBackDirection) { key ->
                 VerseBoxNavEntry(interceptPredictiveBack, onBack) {

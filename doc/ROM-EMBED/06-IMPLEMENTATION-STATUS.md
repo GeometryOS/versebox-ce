@@ -26,9 +26,11 @@
 
 ## 当前 CI 验证边界
 
-本地还没有运行根 Gradle 的 test 或 assembleDebug。GitHub Actions yaml 也还没有交由 GitHub runner 解释。仓库现状的 compileSdk 是 37，workflows 已改为安装 platform 37；runner 能否安装该平台、Maven Packages token 是否有权限，需要首轮 Actions 输出确认。
+2026-11-25 本地按 app-tests 参数运行 `:vm-rom:test :app:testDebugUnitTest -x :app:stageRomAssets -x :app:verifyRomAssets -PciSkipNativeVerify=true`，BUILD SUCCESSFUL；新增详情分组字段与 legacy 缺失值测试通过。随后按本机三仓库 dist 执行 `:app:stageRomAssets :app:verifyRomAssets :app:assembleDebug -PverseboxRomStrict=true -PciSkipNativeVerify=true`，严格 staging 和 Debug 构建成功。APK 审计确认 ROM 索引、3 个完整 ROM ZIP 与 `libversebox_kanadex_logo.so` 均存在，大小 1,985,380,722 B，SHA-256 为 `7A5BC9EA3ED4E0B3D9007E60DF73CBD9F5F837A49BF2EF0151FE5183F54F4213`。CI 参数跳过 A10 guest runtime 校验，因此该 APK 不含 guest runtime 核心库，只用于 app 与 ROM 管理 UI 测试，不用于启动客体。已单次执行 `adb -s 8ac2ffd3 install -r`，设备返回 Success，versionCode 105，lastUpdateTime 为 2026-11-25 23:47:44；未启动 App 或虚拟机，等待维护者目视验收。
 
-app/rom-embed.local.json 是本机被 ignore 的现有配置，本次没有覆盖或删除它。A15 的 doc/RELEASE/ARTIFACTS.md 在开始时已有维护者改动，本次未触碰。
+本次未运行 GitHub Actions；线上 runner 能否安装 compileSdk 37、Maven Packages 凭据是否具备仍待线上 workflow 验证。
+
+app/rom-embed.env 是本机配置，指向三个独立 guest-runtime 仓库的本地 dist；本次未改该配置或任何 guest-runtime 仓库源码。A15 的 doc/RELEASE/ARTIFACTS.md 未触碰。
 
 ## 2026-11-22 追加：参考 APK 兜底已移除
 

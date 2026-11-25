@@ -38,6 +38,8 @@ enum class RomListMode { Manage, Pick }
  * 列表页状态。页面只渲染它，判断、拼串、分组的活在这一层做完。
  */
 data class RomListState(
+    // 页面展示的原始行与分组项共享同一次仓库快照
+    val rows: List<RomRow> = emptyList(),
     // 已经分好组的行，分组规则在 RomGrouping
     val groups: List<RomGroup> = emptyList(),
     /**
@@ -143,7 +145,8 @@ class RomListViewModel(
         RomListState(
             mode = mode,
             selectedRowId = if (mode == RomListMode.Pick) appState.createVmRowId.value else null,
-            // 第一帧直接用内存里已经扫过的行分组画出来，不读盘，也不闪空态
+            // 第一帧直接用内存里已经扫过的行画出来，不读盘，也不闪空态
+            rows = appState.romRows.value,
             groups = groupsOf(appState.romRows.value, selectionOf(null)),
             isLoading = appState.romRows.value.isEmpty(),
         ),
@@ -160,6 +163,14 @@ class RomListViewModel(
     init {
         // init 只登记任务，不读盘
         refresh()
+        scope.launch {
+            appState.romRows.collect { rows ->
+                if (rows.isNotEmpty() || !_state.value.isLoading) {
+                    lastRows = rows
+                    publish(rows)
+                }
+            }
+        }
         // 定位请求来自第一屏那个 Activity，只能监听 AppState，页面传参收不到
         scope.launch {
             snapshotFlow { appState.romFocus }.collect { focus ->
@@ -330,7 +341,7 @@ class RomListViewModel(
     private fun publish(rows: List<RomRow>) {
         val selected = selectionOf(_state.value.selectedRowId)
         _state.update {
-            it.copy(groups = groupsOf(rows, selected), isLoading = false)
+            it.copy(rows = rows, groups = groupsOf(rows, selected), isLoading = false)
         }
     }
 

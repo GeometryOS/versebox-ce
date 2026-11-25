@@ -10,19 +10,33 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 
 @Composable
-fun BaseItemContainer(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
-    // Read the dynamic shape from the SegmentedColumn environment
+fun BaseItemContainer(
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
+    content: @Composable () -> Unit,
+) {
     val baseShape = LocalSegmentedItemShape.current
     val backgroundColor = MaterialTheme.colorScheme.surfaceBright
-
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        color = backgroundColor,
-        shape = baseShape,
-    ) {
-        // Container to keep children aligned and respect the shape
+    val itemContent: @Composable () -> Unit = {
         Column(modifier = Modifier.fillMaxWidth()) {
             content()
         }
+    }
+
+    if (onClick == null) {
+        Surface(
+            modifier = modifier.fillMaxWidth(),
+            color = backgroundColor,
+            shape = baseShape,
+            content = itemContent,
+        )
+    } else {
+        Surface(
+            onClick = onClick,
+            modifier = modifier.fillMaxWidth(),
+            color = backgroundColor,
+            shape = baseShape,
+            content = itemContent,
+        )
     }
 }

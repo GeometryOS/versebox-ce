@@ -53,6 +53,9 @@ sealed interface Route : NavKey {
     data class RomList(val pickForCreate: Boolean = false) : Route
 
     @Serializable
+    data class RomDetail(val rowId: String, val pickForCreate: Boolean = false) : Route
+
+    @Serializable
     data class VmManage(val id: String) : Route
 
     /**

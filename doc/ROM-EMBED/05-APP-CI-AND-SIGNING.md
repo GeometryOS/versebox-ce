@@ -8,7 +8,7 @@
 | `app-build.yml` | push/PR：tests → rom-stage → debug → audit 四段依赖 | 任一 job 失败则后续不执行 |
 | `app-release.yml` | tag `vX.Y.Z`：自足构建 full/minimal、验签、发布 | Secret 缺失、构建/验签/hash 错误均阻断 |
 
-`app-tests.yml` 是客户端业务逻辑的必需 CI 入口，`app-build.yml` 的 tests job 复用它，不再新增平行 workflow；两个 job 的汇总与报告步骤收敛在 `.github/actions/test-report`，artifact 名分别是 `app-test-results-policy` 与 `app-test-results-android`。ROM 行为测试使用 Robolectric/JVM 夹具和应用/系统临时目录，执行 :vm-rom:test、:guest-runtime:testDebugUnitTest 与 :app:testDebugUnitTest。覆盖 ROM ZIP 导入、真实解包清单校验、RuntimeFiles.installData 从 ROM payload 补齐缺失/损坏的实例文件、RomRepository.rows 实际列表扫描和三项元信息、单台虚拟机只归属一行、解包体缺文件后的 ROM_REPAIR，以及解包目录不完整后的 ROM_REEXTRACT。每个操作日志须在记录详情归档中可读，重解包记录须早于后续 LAUNCH 收尾。测试只写 Robolectric 应用沙箱和系统临时目录，不接触维护者的 ROM、设备数据或 guest-runtime-a9/a10/a15 仓库。JUnit 报告缺失、测试数为零或失败均阻断 workflow。
+`app-tests.yml` 是客户端业务逻辑的必需 CI 入口，`app-build.yml` 的 tests job 复用它，不再新增平行 workflow；两个 job 的汇总与报告步骤收敛在 `.github/actions/test-report`，artifact 名分别是 `app-test-results-policy` 与 `app-test-results-android`。ROM 行为测试使用 Robolectric/JVM 夹具和应用/系统临时目录，执行 :vm-rom:test、:guest-runtime:testDebugUnitTest 与 :app:testDebugUnitTest。`:vm-rom:test` 同时覆盖详情字段分组、legacy 版本标记过滤和缺失元数据省略。覆盖 ROM ZIP 导入、真实解包清单校验、RuntimeFiles.installData 从 ROM payload 补齐缺失/损坏的实例文件、RomRepository.rows 实际列表扫描和三项元信息、单台虚拟机只归属一行、解包体缺文件后的 ROM_REPAIR，以及解包目录不完整后的 ROM_REEXTRACT。每个操作日志须在记录详情归档中可读，重解包记录须早于后续 LAUNCH 收尾。测试只写 Robolectric 应用沙箱和系统临时目录，不接触维护者的 ROM、设备数据或 guest-runtime-a9/a10/a15 仓库。JUnit 报告缺失、测试数为零或失败均阻断 workflow。
 
 ## job 与外部依赖的边界
 

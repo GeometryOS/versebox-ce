@@ -173,6 +173,7 @@ fun RomListPage(useBlur: Boolean, mode: RomListMode = RomListMode.Manage) {
                                 RomRow(
                                     rom = rom,
                                     pickMode = state.isPick,
+                                    onOpen = { navigator.push(Route.RomDetail(rom.rowId, state.isPick)) },
                                     highlight = state.highlightKey == rom.key,
                                     onHighlightFinished = { viewModel.dispatch(RomListAction.ConsumeFocus) },
                                     onDelete = { viewModel.dispatch(RomListAction.RequestDelete(rom.rowId)) },
@@ -280,6 +281,7 @@ private fun romGroupIndex(groups: List<RomGroup>, key: String, isLoading: Boolea
 private fun RomRow(
     rom: RomItem,
     pickMode: Boolean,
+    onOpen: () -> Unit,
     onDelete: () -> Unit,
     onCheck: () -> Unit,
     onRepair: () -> Unit,
@@ -299,7 +301,10 @@ private fun RomRow(
         }
         onHighlightFinished()
     }
-    BaseItemContainer(modifier = Modifier.graphicsLayer { alpha = pulse.value }) {
+    BaseItemContainer(
+        modifier = Modifier.graphicsLayer { alpha = pulse.value },
+        onClick = onOpen,
+    ) {
         Column(
             modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 12.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),

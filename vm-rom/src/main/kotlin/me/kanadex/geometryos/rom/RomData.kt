@@ -129,6 +129,12 @@ data class RomCheckReport(
     val firstProblem: String? get() = problems.firstOrNull()
 }
 
+/** ROM 详情页显示的一项真实字段。 */
+data class RomDetailFact(val label: String, val value: String)
+
+/** ROM 详情页按分类展示的一组字段。 */
+data class RomDetailSection(val title: String, val facts: List<RomDetailFact>)
+
 /**
  * 页面直接画的一行，文案已经由逻辑层拼好。
  * 页面只画标题、说明、元信息和徽章，把点击翻译成 Action。

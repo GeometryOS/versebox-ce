@@ -5,7 +5,7 @@ package me.kanadex.geometryos.rom
 import java.util.Locale
 
 /**
- * ROM 列表、对话框与版本管理页上给用户看的全部文案。
+ * ROM 列表、详情、对话框与版本管理页上给用户看的全部文案。
  *
  * 输入是 RomRow 与版本决策，输出是界面字符串；这里只做措辞，不做状态判断，
  * 判断在 RomVersionPolicy。两个 UI 分支共用这一份，页面不许再拼第二份。
@@ -84,6 +84,62 @@ object RomTexts {
     // 一行摘要，给只画一行的版式用
     fun summary(row: RomRow): String =
         (badges(row).map { it.text } + meta(row)).filter { it.isNotBlank() }.joinToString(" / ")
+
+    fun detailSections(row: RomRow): List<RomDetailSection> {
+        val basic = buildList {
+            add(RomDetailFact(DETAIL_LABEL_NAME, title(row)))
+            row.description.takeIf { it.isNotBlank() }?.let { add(RomDetailFact(DETAIL_LABEL_DESCRIPTION, it)) }
+            row.version.takeIf { it.isNotBlank() && it != RomKeys.LEGACY_VERSION }?.let { add(RomDetailFact(DETAIL_LABEL_VERSION, it)) }
+            row.androidVersion.takeIf { it.isNotBlank() }?.let { add(RomDetailFact(DETAIL_LABEL_ANDROID, it)) }
+            if (row.apiLevel > 0) add(RomDetailFact(DETAIL_LABEL_API, row.apiLevel.toString()))
+            add(RomDetailFact(DETAIL_LABEL_SOURCE, sourceLabel(row.source)))
+            val status = when {
+                row.source == RomSource.Legacy -> DETAIL_LEGACY
+                else -> stateDetail(row) ?: if (row.isReady) "已解包" else "尚未解包"
+            }
+            add(RomDetailFact(DETAIL_LABEL_STATUS, status))
+            when (row.libMode.lowercase(Locale.ROOT)) {
+                "apk" -> add(RomDetailFact(DETAIL_LABEL_LIB_MODE, DETAIL_LIB_APK))
+                "rom" -> add(RomDetailFact(DETAIL_LABEL_LIB_MODE, DETAIL_LIB_ROM))
+                else -> row.libMode.takeIf { it.isNotBlank() }?.let { add(RomDetailFact(DETAIL_LABEL_LIB_MODE, it)) }
+            }
+        }
+        val storage = buildList {
+            val archive = when {
+                row.source == RomSource.Legacy -> DETAIL_LEGACY
+                row.archiveBytes > 0L -> bytes(row.archiveBytes)
+                else -> "未记录"
+            }
+            add(RomDetailFact(DETAIL_LABEL_ARCHIVE, archive))
+            val extracted = when {
+                row.source == RomSource.Legacy -> DETAIL_LEGACY
+                row.isReady && row.extractedBytes > 0L -> bytes(row.extractedBytes)
+                row.isReady -> "未记录"
+                else -> "尚未生成"
+            }
+            add(RomDetailFact(DETAIL_LABEL_EXTRACTED, extracted))
+        }
+        val usage = buildList {
+            add(RomDetailFact(DETAIL_LABEL_VM_COUNT, row.usedByVms.toString() + " 台"))
+            row.usedByNames.takeIf { it.isNotEmpty() }?.let {
+                add(RomDetailFact(DETAIL_LABEL_VM_NAMES, it.joinToString("、")))
+            }
+            if (row.source == RomSource.Imported && row.installedAt > 0L) {
+                add(RomDetailFact(DETAIL_LABEL_IMPORTED, dateTime(row.installedAt)))
+            }
+            row.lastUsedAt?.takeIf { it > 0L }?.let {
+                add(RomDetailFact(DETAIL_LABEL_LAST_USED, dateTime(it)))
+            }
+        }
+        return listOf(
+            RomDetailSection(DETAIL_GROUP_INFO, basic),
+            RomDetailSection(DETAIL_GROUP_STORAGE, storage),
+            RomDetailSection(DETAIL_GROUP_USAGE, usage),
+        )
+    }
+
+    private fun dateTime(timestamp: Long): String =
+        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(java.util.Date(timestamp))
 
     fun item(row: RomRow, selected: Boolean = false): RomItem {
         // 选中只看调用方给的那一行，同 key 的内置与本地是两份
@@ -179,7 +235,37 @@ object RomTexts {
     fun extractedNow(row: RomRow?): String =
         "已解包 " + (row?.let { titleWithVersion(it) } ?: "ROM")
 
-    // 版本管理
+    const val DETAIL_PAGE_TITLE = "ROM 详情"
+    const val DETAIL_GROUP_INFO = "ROM 信息"
+    const val DETAIL_GROUP_STORAGE = "存储占用"
+    const val DETAIL_GROUP_USAGE = "使用情况"
+    const val DETAIL_LOADING = "正在读取 ROM…"
+    const val DETAIL_MISSING = "这个 ROM 已不在列表中"
+    const val DETAIL_ACTION_CHECK = "检查解包内容"
+    const val DETAIL_ACTION_REPAIR = "修复 / 重新解包"
+    const val DETAIL_ACTION_DELETE = "删除 ROM"
+    const val DETAIL_ACTION_CLEAR = "清理解包体"
+    const val DETAIL_ACTION_NONE = "没有可用操作"
+    const val DETAIL_CREATE = "新建虚拟机"
+    const val DETAIL_PICK = "选择 ROM"
+
+    const val DETAIL_LABEL_NAME = "ROM 名称"
+    const val DETAIL_LABEL_DESCRIPTION = "介绍"
+    const val DETAIL_LABEL_VERSION = "ROM 版本"
+    const val DETAIL_LABEL_ANDROID = "Android 版本"
+    const val DETAIL_LABEL_API = "API 级别"
+    const val DETAIL_LABEL_SOURCE = "来源"
+    const val DETAIL_LABEL_STATUS = "状态"
+    const val DETAIL_LABEL_ARCHIVE = "ROM 包大小"
+    const val DETAIL_LABEL_EXTRACTED = "解包后大小"
+    const val DETAIL_LABEL_VM_COUNT = "使用虚拟机"
+    const val DETAIL_LABEL_VM_NAMES = "虚拟机名称"
+    const val DETAIL_LABEL_IMPORTED = "导入时间"
+    const val DETAIL_LABEL_LAST_USED = "最近使用"
+    const val DETAIL_LABEL_LIB_MODE = "动态库位置"
+    const val DETAIL_LIB_APK = "安装包内"
+    const val DETAIL_LIB_ROM = "ROM 包内"
+    const val DETAIL_LEGACY = "随安装包提供"
 
     const val VERSION_ENTRY_TITLE = "ROM 版本管理"
 
