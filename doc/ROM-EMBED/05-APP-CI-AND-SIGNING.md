@@ -1,14 +1,14 @@
 # app CI 与签名发布
 
-根 app CI 共三个**独立** workflow：app-tests（push/PR）与 app-build（push/PR，内部 tests → rom-stage → debug → audit 依次依赖）；app-release 由 tag 推送触发。push 上显示 2/2，tag 上 3/3。
+根 app CI 共三个 workflow，**push/PR 只有 app-build 一个入口**：它的 tests job 以可复用工作流调用 app-tests，后者提供 policy 与 android 两个 job；之后 rom-stage → debug → audit 依次依赖。app-tests 只保留 `workflow_call` 与手动入口，不再自己监听 push，否则同一条测试命令会在一次提交里并发跑两遍。一次 push 是 1 个 run、5 个 check，tag 再加 app-release 的 release job。
 
 | Workflow | 阶段 | 失败门禁 |
 | --- | --- | --- |
-| `app-tests.yml` | push/PR：模块单测 + JUnit 汇总 | 测试非零或无报告即失败 |
+| `app-tests.yml` | 可复用入口：policy（`:log-audit`/`:vm-display`/`:vm-rom`）与 android（`:guest-runtime`/`:app` 加 Rust 契约）两个 job，共用 JUnit 汇总 | 测试非零或无报告即失败 |
 | `app-build.yml` | push/PR：tests → rom-stage → debug → audit 四段依赖 | 任一 job 失败则后续不执行 |
 | `app-release.yml` | tag `vX.Y.Z`：自足构建 full/minimal、验签、发布 | Secret 缺失、构建/验签/hash 错误均阻断 |
 
-`app-tests.yml` 是客户端业务逻辑的必需 CI 入口，`app-build.yml` 的 tests job 复用它，不再新增平行 workflow。ROM 行为测试使用 Robolectric/JVM 夹具和应用/系统临时目录，执行 :vm-rom:test、:guest-runtime:testDebugUnitTest 与 :app:testDebugUnitTest。覆盖 ROM ZIP 导入、真实解包清单校验、RuntimeFiles.installData 从 ROM payload 补齐缺失/损坏的实例文件、RomRepository.rows 实际列表扫描和三项元信息、单台虚拟机只归属一行、解包体缺文件后的 ROM_REPAIR，以及解包目录不完整后的 ROM_REEXTRACT。每个操作日志须在记录详情归档中可读，重解包记录须早于后续 LAUNCH 收尾。测试只写 Robolectric 应用沙箱和系统临时目录，不接触维护者的 ROM、设备数据或 guest-runtime-a9/a10/a15 仓库。JUnit 报告缺失、测试数为零或失败均阻断 workflow。
+`app-tests.yml` 是客户端业务逻辑的必需 CI 入口，`app-build.yml` 的 tests job 复用它，不再新增平行 workflow；两个 job 的汇总与报告步骤收敛在 `.github/actions/test-report`，artifact 名分别是 `app-test-results-policy` 与 `app-test-results-android`。ROM 行为测试使用 Robolectric/JVM 夹具和应用/系统临时目录，执行 :vm-rom:test、:guest-runtime:testDebugUnitTest 与 :app:testDebugUnitTest。覆盖 ROM ZIP 导入、真实解包清单校验、RuntimeFiles.installData 从 ROM payload 补齐缺失/损坏的实例文件、RomRepository.rows 实际列表扫描和三项元信息、单台虚拟机只归属一行、解包体缺文件后的 ROM_REPAIR，以及解包目录不完整后的 ROM_REEXTRACT。每个操作日志须在记录详情归档中可读，重解包记录须早于后续 LAUNCH 收尾。测试只写 Robolectric 应用沙箱和系统临时目录，不接触维护者的 ROM、设备数据或 guest-runtime-a9/a10/a15 仓库。JUnit 报告缺失、测试数为零或失败均阻断 workflow。
 
 ## job 与外部依赖的边界
 
@@ -16,7 +16,7 @@ ROM staging 要访问三个运行时仓库的 Release 资产，只有拿到令�
 
 | job | 网络 | GITHUB_TOKEN | 说明 |
 | --- | --- | --- | --- |
-| app-tests / tests | 不使用 | 不注入 | 单测离线通过，命令带 `-x :app:stageRomAssets -x :app:verifyRomAssets` |
+| app-build / policy、android | 不使用 | 不注入 | 单测离线通过，命令带 `-x :app:stageRomAssets -x :app:verifyRomAssets` |
 | app-build / rom-stage | GitHub API 与 Release 资产 | 必需，`contents: read` | 解析清单、逐文件校验 SHA-256、上传 staging |
 | app-build / debug | 不使用 | 不注入 | 复用 artifact，`-x :app:stageRomAssets` 仍执行 verifyRomAssets 复核 |
 | app-release | GitHub API 与 Release 资产 | 必需，`contents: write` | 构建 full 与 minimal 两个 APK 并发布 |
@@ -37,7 +37,7 @@ ROM staging 要访问三个运行时仓库的 Release 资产，只有拿到令�
 
 ## 本机复现
 
-单测（离线，与 app-tests job 同参数）：
+单测（离线，与 app-tests job 同参数）。Robolectric 的 Android SDK 镜像由根构建脚本的 `:stageRobolectricSdk` 预先解析到 `build/robolectric-sdk`，测试只读该目录，运行期不访问 Maven Central：
 
     .\gradlew.bat --no-daemon --console=plain :log-audit:test :vm-display:test :vm-rom:test :guest-runtime:testDebugUnitTest :app:testDebugUnitTest -x :app:stageRomAssets -x :app:verifyRomAssets -PciSkipNativeVerify=true
 

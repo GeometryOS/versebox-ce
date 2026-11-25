@@ -54,6 +54,9 @@ kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-c
 # :log-audit 的策略单测
 junit4 = { module = "junit:junit", version = "4.13.2" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
+# Robolectric 运行期需要的 Android SDK 镜像：版本号要与 libs.versions.toml 的 robolectric 对应，
+# 由根构建脚本解析并预置，避免测试期直连 Maven Central 被 429。
+robolectric-android-all = { module = "org.robolectric:android-all-instrumented", version = "15-robolectric-12650502-i7" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "ktxSerialization" }
 # aboutlibraries：core 提供 Libs 数据模型，compose-m3 提供许可列表 UI
 aboutlibraries-core = { module = "com.mikepenz:aboutlibraries-core", version.ref = "aboutLibraries" }

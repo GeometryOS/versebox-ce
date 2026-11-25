@@ -8,6 +8,8 @@ on:
 permissions:
   contents: read
   packages: read
+  # app-tests 作为可复用工作流被调用，Checks 列表的写权限要由调用方提供
+  checks: write
 
 concurrency:
   group: app-build-${{ github.ref }}

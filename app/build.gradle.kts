@@ -127,17 +127,38 @@ val buildVerseBoxLogo = tasks.register<Exec>("buildVerseBoxLogo") {
                 properties.getProperty("sdk.dir")
             }
             ?: throw GradleException("Android SDK path is missing from environment and local.properties")
-        val ndk = providers.environmentVariable("ANDROID_NDK_HOME").orNull
-            ?: providers.environmentVariable("ANDROID_NDK_ROOT").orNull
-            ?: File(sdk, "ndk/29.0.14206865").absolutePath
         val hostTag = when {
             System.getProperty("os.name").startsWith("Windows", ignoreCase = true) -> "windows-x86_64"
             System.getProperty("os.name").startsWith("Mac", ignoreCase = true) -> "darwin-x86_64"
             else -> "linux-x86_64"
         }
         val suffix = if (hostTag.startsWith("windows")) ".cmd" else ""
-        val linker = File(ndk, "toolchains/llvm/prebuilt/$hostTag/bin/aarch64-linux-android35-clang$suffix")
-        if (!linker.isFile) throw GradleException("Rust Android linker is missing: $linker")
+        fun linkerIn(ndk: File): File? {
+            val bin = File(ndk, "toolchains/llvm/prebuilt/$hostTag/bin")
+            val wrapper = Regex("aarch64-linux-android(\\d+)-clang" + Regex.escape(suffix))
+            return bin.listFiles()
+                ?.filter { wrapper.matches(it.name) }
+                ?.maxByOrNull { wrapper.matchEntire(it.name)!!.groupValues[1].toInt() }
+        }
+
+        // CI 上装的 NDK 版本随 AGP 变化，写死版本号会在 runner 上直接找不到 linker。
+        val candidates = buildList {
+            providers.environmentVariable("ANDROID_NDK_HOME").orNull?.let { add(File(it)) }
+            providers.environmentVariable("ANDROID_NDK_ROOT").orNull?.let { add(File(it)) }
+            File(sdk, "ndk").listFiles()
+                ?.filter { it.isDirectory }
+                ?.sortedWith(
+                    compareByDescending<File> { it.name.substringBefore('.').toIntOrNull() ?: -1 }
+                        .thenByDescending { it.name },
+                )
+                ?.let { addAll(it) }
+            add(File(sdk, "ndk-bundle"))
+        }
+        val linker = candidates.firstNotNullOfOrNull { linkerIn(it) }
+            ?: throw GradleException(
+                "Rust Android linker not found under $sdk. Looked for aarch64-linux-android<api>-clang in " +
+                    candidates.joinToString { it.absolutePath },
+            )
         environment("CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER", linker.absolutePath)
         environment("CARGO_TARGET_DIR", logoRustTargetDir.get().asFile.absolutePath)
         commandLine("cargo", "build", "--release", "--target", logoRustTarget, "--manifest-path", logoRustDir.file("Cargo.toml").asFile.absolutePath)

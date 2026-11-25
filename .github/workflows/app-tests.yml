@@ -1,10 +1,10 @@
 name: app tests
 
+# 只作为可复用入口与手动入口，不再自己监听 push/PR：
+# push 的唯一入口是 app-build，由它调用本工作流，保证同一条测试命令每次提交只跑一遍。
 on:
-  push:
-  pull_request:
-  workflow_dispatch:
   workflow_call:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -17,7 +17,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  tests:
+  # 纯 JVM 策略库：不碰 Android 运行时，失败面是版本比较、分组与文案契约。
+  policy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-android
+      # 单测是离线 job：不读网络、不注入令牌。:app:testDebugUnitTest 经 preBuild 会拉起
+      # :app:stageRomAssets，漏掉 -x 就等于在无令牌的 runner 上拉 ROM，必然 403。
+      # 这里故意不给令牌：谁再把 staging 拉进单测，应当立刻失败，而不是静默下载 GB 级产物。
+      - name: 运行策略库单元测试
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon --console=plain \
+            :log-audit:test :vm-display:test :vm-rom:test \
+            -x :app:stageRomAssets -x :app:verifyRomAssets -PciSkipNativeVerify=true
+      - uses: ./.github/actions/test-report
+        with:
+          artifact-name: app-test-results-policy
+
+  # Android 侧：Robolectric 夹具 + Rust 品牌动效契约，失败面是 ROM 仓库、SQLite 与渲染时序。
+  android:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -26,103 +50,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-android
-      # 单测是离线 job：不读网络、不注入令牌。ROM staging 要访问三个运行时仓库的 Release，
-      # 属于 app-build 的 rom-stage job。:app:testDebugUnitTest 经 preBuild 会拉起
-      # :app:stageRomAssets，漏掉 -x 就等于在无令牌的 runner 上拉 ROM，必然 403。
-      # 这里故意不给令牌：谁再把 staging 拉进单测，应当立刻失败，而不是静默下载 GB 级产物。
-      - name: 运行模块单元测试
+      - name: 验证Rust品牌Logo动效
+        run: cargo test --manifest-path app/src/main/rust/Cargo.toml --locked --offline
+      - name: 运行Android侧单元测试
         run: |
           set -euo pipefail
           ./gradlew --no-daemon --console=plain \
-            :log-audit:test :vm-display:test :vm-rom:test :guest-runtime:testDebugUnitTest :app:testDebugUnitTest \
+            :guest-runtime:testDebugUnitTest :app:testDebugUnitTest \
             -x :app:stageRomAssets -x :app:verifyRomAssets -PciSkipNativeVerify=true
-      - name: 验证Rust品牌Logo动效
-        run: cargo test --manifest-path app/src/main/rust/Cargo.toml --locked --offline
-      # 日志里默认只有失败栈，全绿时一行用例都没有。汇总步骤把每个模块、每个套件的
-      # 用例数、耗时与失败用例名打印到 stdout 与 ${GITHUB_STEP_SUMMARY}，Job Summary 页可直接读。
-      - name: 汇总测试结果
-        if: always()
-        run: |
-          python3 - <<'PY'
-          import glob, os, sys, xml.etree.ElementTree as ET
-
-          files = sorted(glob.glob('**/build/test-results/**/TEST-*.xml', recursive=True))
-          if not files:
-              sys.exit('没有产生任何 JUnit XML：测试没有执行或没有落盘')
-
-          mods = {}
-          failed = []
-          for path in files:
-              root = ET.parse(path).getroot()
-              attr = root.attrib
-              mod = path.replace('\\', '/').split('/')[0]
-              row = mods.setdefault(mod, {'suites': 0, 'tests': 0, 'ok': 0, 'failures': 0, 'errors': 0, 'skipped': 0, 'time': 0.0})
-              row['suites'] += 1
-              for key in ('tests', 'failures', 'errors', 'skipped'):
-                  row[key] += int(attr.get(key, 0))
-              row['ok'] += int(attr.get('tests', 0)) - int(attr.get('failures', 0)) - int(attr.get('errors', 0)) - int(attr.get('skipped', 0))
-              row['time'] += float(attr.get('time', 0) or 0)
-              for case in root.iter('testcase'):
-                  if case.find('failure') is not None or case.find('error') is not None:
-                      failed.append('%s :: %s > %s' % (mod, attr.get('name', '?'), case.get('name', '?')))
-
-          print('测试结果（按模块）')
-          for mod in sorted(mods):
-              row = mods[mod]
-              print('  %-14s 套件 %-3d 用例 %-4d 通过 %-4d 失败 %-3d 错误 %-3d 跳过 %-3d %6.1f s' % (
-                  mod, row['suites'], row['tests'], row['ok'], row['failures'], row['errors'], row['skipped'], row['time']))
-          tests = sum(r['tests'] for r in mods.values())
-          ok = sum(r['ok'] for r in mods.values())
-          failures = sum(r['failures'] for r in mods.values())
-          errors = sum(r['errors'] for r in mods.values())
-          skipped = sum(r['skipped'] for r in mods.values())
-          cost = sum(r['time'] for r in mods.values())
-          print('合计：套件 %d，用例 %d，通过 %d，失败 %d，错误 %d，跳过 %d，%.1f s' % (
-              len(files), tests, ok, failures, errors, skipped, cost))
-          if failed:
-              print('失败用例：')
-              for item in failed:
-                  print('  ' + item)
-
-          summary = ['## 测试结果', '', '| 模块 | 套件 | 用例 | 通过 | 失败 | 错误 | 跳过 | 耗时 |',
-                     '| --- | --- | --- | --- | --- | --- | --- | --- |']
-          for mod in sorted(mods):
-              row = mods[mod]
-              summary.append('| %s | %d | %d | %d | %d | %d | %d | %.1f s |' % (
-                  mod, row['suites'], row['tests'], row['ok'], row['failures'], row['errors'], row['skipped'], row['time']))
-          summary.append('| 合计 | %d | %d | %d | %d | %d | %d | %.1f s |' % (
-              len(files), tests, ok, failures, errors, skipped, cost))
-          if failed:
-              summary += ['', '### 失败用例', '']
-              summary += ['- %s' % item for item in failed]
-          step_summary = os.environ.get('GITHUB_STEP_SUMMARY')
-          if step_summary:
-              with open(step_summary, 'a', encoding='utf-8') as fh:
-                  fh.write('\n'.join(summary) + '\n')
-
-          if failures or errors:
-              sys.exit('%d 个用例失败、%d 个用例出错' % (failures, errors))
-          PY
-
-      # GitHub 的 Tests 页要的是 XML 之外的一步：这个 action 把 XML 变成可展开的用例列表与行内注解。
-      # 展示用途，fork PR 拿不到 checks: write 时不阻断门禁（门禁是上一步的退出码）。
-      - name: 发布测试结果到 Checks
-        if: always()
-        continue-on-error: true
-        uses: dorny/test-reporter@v1
+      - uses: ./.github/actions/test-report
         with:
-          name: 单元测试结果
-          path: "**/build/test-results/**/*.xml"
-          reporter: java-junit
-          fail-on-error: false
-
-      - name: 上传测试报告
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-test-results
-          # XML 给机器与 Checks 用；reports/tests 里是带样式的 HTML，是给人看的版本
-          path: |
-            **/build/test-results/**/*.xml
-            **/build/reports/tests/**
-          if-no-files-found: warn
+          artifact-name: app-test-results-android
