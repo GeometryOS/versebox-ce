@@ -24,11 +24,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-android
+      # 单测是离线 job：不读网络、不注入令牌。ROM staging 要访问三个运行时仓库的 Release，
+      # 属于 app-build 的 rom-stage job。:app:testDebugUnitTest 经 preBuild 会拉起
+      # :app:stageRomAssets，漏掉 -x 就等于在无令牌的 runner 上拉 ROM，必然 403。
+      # 这里故意不给令牌：谁再把 staging 拉进单测，应当立刻失败，而不是静默下载 GB 级产物。
       - name: 运行模块单元测试
         run: |
           set -euo pipefail
           ./gradlew --no-daemon --console=plain \
-            :log-audit:test :vm-display:test :vm-rom:test :guest-runtime:testDebugUnitTest :app:testDebugUnitTest -PciSkipNativeVerify=true
+            :log-audit:test :vm-display:test :vm-rom:test :guest-runtime:testDebugUnitTest :app:testDebugUnitTest \
+            -x :app:stageRomAssets -x :app:verifyRomAssets -PciSkipNativeVerify=true
       - name: 汇总测试结果
         if: always()
         run: |

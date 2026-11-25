@@ -293,36 +293,87 @@ fun readRomEmbedSources(): List<RomEmbedSource> {
 
 /* ---------- 版本指针与完整性校验（pack-audit-intent.json） ---------- */
 
-fun httpText(url: String): String {
+val romCiDocPath = "doc/ROM-EMBED/05-APP-CI-AND-SIGNING.md"
+
+fun githubToken(): String? = System.getenv("GITHUB_TOKEN")?.takeIf { it.isNotBlank() }
+
+/** Release 资源会重定向到对象存储；那里用的是签名 URL，带上 Authorization 会被拒。 */
+fun githubAuthHost(host: String?): Boolean =
+    host.equals("api.github.com", true) || host.equals("github.com", true) || host.equals("www.github.com", true)
+
+fun openGithub(url: String, accept: String, readTimeoutMs: Int): java.net.HttpURLConnection {
     val connection = URI(url).toURL().openConnection() as java.net.HttpURLConnection
     connection.connectTimeout = 15_000
-    connection.readTimeout = 60_000
-    connection.setRequestProperty("Accept", "application/vnd.github+json")
-    System.getenv("GITHUB_TOKEN")?.takeIf { it.isNotBlank() }?.let {
-        connection.setRequestProperty("Authorization", "Bearer " + it)
+    connection.readTimeout = readTimeoutMs
+    // 自己跟重定向：HttpURLConnection 会把 Authorization 一起带到别的域，签名 URL 与服务头互斥。
+    connection.instanceFollowRedirects = false
+    connection.setRequestProperty("Accept", accept)
+    if (githubAuthHost(URI(url).host)) {
+        githubToken()?.let { connection.setRequestProperty("Authorization", "Bearer " + it) }
     }
+    return connection
+}
+
+fun httpBody(connection: java.net.HttpURLConnection): String =
+    runCatching { connection.errorStream?.use { it.readBytes().toString(Charsets.UTF_8) } }.getOrNull().orEmpty()
+
+/**
+ * 403 至少有三种成因：未认证限流、令牌额度用尽、令牌没有该仓库的读取权。
+ * 三种的处理方式完全不同，所以按 X-RateLimit-Remaining 与是否注入令牌分开报。
+ */
+fun httpFailure(label: String, url: String, code: Int, connection: java.net.HttpURLConnection): String {
+    val authorized = githubToken() != null
+    val remaining = connection.getHeaderField("X-RateLimit-Remaining")
+    val resetAt = connection.getHeaderField("X-RateLimit-Reset")?.toLongOrNull()
+    val cause = when {
+        code == 401 -> "令牌无效或已过期"
+        code == 403 && remaining == "0" && authorized -> "令牌的每小时额度已用尽"
+        code == 403 && remaining == "0" -> "未认证限流，每小时 60 次，CI runner 的出口 IP 是共享的"
+        code == 403 && authorized -> "令牌没有该仓库的读取权限，需要 contents: read；私有仓库还要在仓库设置里授权"
+        code == 403 -> "请求被拒，通常是未认证限流"
+        code == 404 -> "仓库或 Release 不存在，或当前令牌看不到这个私有仓库"
+        code == 429 -> "被上游限流，需要退避后重试"
+        else -> "HTTP " + code
+    }
+    val wait = resetAt?.let { (it * 1000 - System.currentTimeMillis()).coerceAtLeast(0L) / 60_000 }
+    val snippet = httpBody(connection).trim().replace(Regex("\\s+"), " ").take(200)
+    return buildString {
+        append(label).append(" 返回 ").append(code).append("：").append(cause).append("。")
+        append(" url=").append(url).append("；GITHUB_TOKEN ")
+        append(if (authorized) "已注入" else "未注入")
+        remaining?.let { append("；剩余额度=").append(it) }
+        wait?.let { append("；额度约 ").append(it).append(" 分钟后恢复") }
+        if (snippet.isNotEmpty()) append("；响应体=").append(snippet)
+        append("。处理方式见 ").append(romCiDocPath).append("。")
+    }
+}
+
+fun httpText(url: String): String {
+    val connection = openGithub(url, "application/vnd.github+json", 60_000)
     val code = connection.responseCode
-    if (code == 403) {
-        throw GradleException(
-            "GitHub API 返回 403（通常是未认证限流）。请为构建提供 GITHUB_TOKEN 后重试：" + url,
-        )
-    }
-    if (code !in 200..299) {
-        throw GradleException("GitHub API 返回 " + code + "：" + url)
-    }
+    if (code !in 200..299) throw GradleException(httpFailure("GitHub API", url, code, connection))
     return connection.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
 }
 
 fun downloadTo(url: String, target: File) {
-    target.parentFile?.mkdirs()
-    val connection = URI(url).toURL().openConnection() as java.net.HttpURLConnection
-    connection.connectTimeout = 15_000
-    connection.readTimeout = 600_000
-    connection.setRequestProperty("Accept", "application/octet-stream")
-    System.getenv("GITHUB_TOKEN")?.takeIf { it.isNotBlank() }?.let {
-        connection.setRequestProperty("Authorization", "Bearer " + it)
+    var current = url
+    var hops = 0
+    while (true) {
+        val connection = openGithub(current, "application/octet-stream", 600_000)
+        val code = connection.responseCode
+        if (code in 300..399) {
+            val location = connection.getHeaderField("Location")
+                ?: throw GradleException("下载 " + current + " 返回 " + code + " 但没有 Location 头")
+            connection.disconnect()
+            if (++hops > 5) throw GradleException("下载 " + url + " 重定向超过 5 次，可能被换成了登录页")
+            current = URI(current).resolve(location).toString()
+            continue
+        }
+        if (code !in 200..299) throw GradleException(httpFailure("ROM 文件下载", current, code, connection))
+        target.parentFile?.mkdirs()
+        connection.inputStream.use { input -> target.outputStream().use { sink -> input.copyTo(sink) } }
+        return
     }
-    connection.inputStream.use { input -> target.outputStream().use { sink -> input.copyTo(sink) } }
 }
 
 fun sha256Of(file: File): String {

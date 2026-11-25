@@ -10,6 +10,41 @@
 
 `app-tests.yml` 是客户端业务逻辑的必需 CI 入口，`app-build.yml` 的 tests job 复用它，不再新增平行 workflow。ROM 行为测试使用 Robolectric/JVM 夹具和应用/系统临时目录，执行 :vm-rom:test、:guest-runtime:testDebugUnitTest 与 :app:testDebugUnitTest。覆盖 ROM ZIP 导入、真实解包清单校验、RuntimeFiles.installData 从 ROM payload 补齐缺失/损坏的实例文件、RomRepository.rows 实际列表扫描和三项元信息、单台虚拟机只归属一行、解包体缺文件后的 ROM_REPAIR，以及解包目录不完整后的 ROM_REEXTRACT。每个操作日志须在记录详情归档中可读，重解包记录须早于后续 LAUNCH 收尾。测试只写 Robolectric 应用沙箱和系统临时目录，不接触维护者的 ROM、设备数据或 guest-runtime-a9/a10/a15 仓库。JUnit 报告缺失、测试数为零或失败均阻断 workflow。
 
+## job 与外部依赖的边界
+
+ROM staging 要访问三个运行时仓库的 Release 资产，只有拿到令牌的 job 才能执行；单测 job 必须完全离线。
+
+| job | 网络 | GITHUB_TOKEN | 说明 |
+| --- | --- | --- | --- |
+| app-tests / tests | 不使用 | 不注入 | 单测离线通过，命令带 `-x :app:stageRomAssets -x :app:verifyRomAssets` |
+| app-build / rom-stage | GitHub API 与 Release 资产 | 必需，`contents: read` | 解析清单、逐文件校验 SHA-256、上传 staging |
+| app-build / debug | 不使用 | 不注入 | 复用 artifact，`-x :app:stageRomAssets` 仍执行 verifyRomAssets 复核 |
+| app-release | GitHub API 与 Release 资产 | 必需，`contents: write` | 构建 full 与 minimal 两个 APK 并发布 |
+
+`:app:testDebugUnitTest` 的依赖链是 `preBuild → verifyRomAssets → stageRomAssets`。因此 `-x` 是单测 job 的契约，不是可选优化：漏掉它，tests job 会在无令牌的 runner 上请求 `https://api.github.com/repos/GeometryOS/VerseBox-guest-runtime-*/releases`，拿到 403 并把整条流水线打红。
+
+令牌只由 Actions 注入（`GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}`）。禁止把令牌写进仓库、`app/rom-embed.env`、构建脚本常量或日志；`app/rom-embed.env` 只登记来源（仓库、版本、profile）。
+
+## ROM staging 的失败判据
+
+| 现象 | 判据 | 处理 |
+| --- | --- | --- |
+| `GitHub API 返回 403：未认证限流` | 令牌未注入且 `X-RateLimit-Remaining: 0` | 该 job 不应跑 staging，按上表把 staging 留给 rom-stage |
+| `403：令牌的每小时额度已用尽` | 有令牌且额度为 0 | 等额度恢复；`_rom_cache` 内已有同版本产物时不会重复下载 |
+| `403：令牌没有该仓库的读取权限` | 有令牌但额度非 0 | 补 `permissions: contents: read`；私有仓库还要在仓库设置里授权 |
+| `404：仓库或 Release 不存在` | 状态码 404 | 核对 `rom-embed.env` 的仓库名与 Release 资产名 |
+| 资产下载返回 403 或 400 | 重定向到对象存储后仍带 `Authorization` | 构建脚本按域决定是否携带该头，重定向由脚本自己跟随 |
+
+## 本机复现
+
+单测（离线，与 app-tests job 同参数）：
+
+    .\gradlew.bat --no-daemon --console=plain :log-audit:test :vm-display:test :vm-rom:test :guest-runtime:testDebugUnitTest :app:testDebugUnitTest -x :app:stageRomAssets -x :app:verifyRomAssets -PciSkipNativeVerify=true
+
+staging（需要三份 dist/<romKey>/ 与本机令牌，来源见 [02-ROM-SOURCE-CONFIG](02-ROM-SOURCE-CONFIG.md)）：
+
+    .\gradlew.bat --no-daemon --console=plain :app:stageRomAssets :app:verifyRomAssets -PverseboxRomStrict=true
+
 JKS 不入库。若 Miuix GitHub Packages 依赖仍为私有包，还需在包仓库设置中授权 VerseBox 仓库读取；Actions job 使用 packages: read 与 GITHUB_TOKEN。将 JKS 原文件 Base64 编码后设置为仓库或环境级 Actions secret `ANDROID_KEYSTORE_BASE64`；同时设置 `ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS` 与 `ANDROID_KEY_PASSWORD`。secret 只能由 release job 读取。建议用 PowerShell 编码，不把明文或编码结果写入仓库：
 
 ```powershell
