@@ -82,6 +82,10 @@ android {
         resValues = true
     }
 
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
+
     packaging {
         // 客体运行库要按原文件名解压到 nativeLibraryDir
         jniLibs.useLegacyPackaging = true
@@ -169,6 +173,9 @@ dependencies {
     // 关于页 / 开放源代码许可页
     implementation(libs.aboutlibraries.core)
     implementation(libs.aboutlibraries.compose.m3)
+
+    testImplementation(libs.junit4)
+    testImplementation(libs.robolectric)
 }
 
 

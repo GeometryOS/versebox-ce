@@ -15,6 +15,7 @@ coreKtx = "1.19.1"
 materialKolor = "6.0.0"
 aboutLibraries = "15.3.0"
 ktxSerialization = "1.11.0"
+robolectric = "4.14.1"
 
 # Android SDK
 compileSdk = "37"
@@ -52,6 +53,7 @@ kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutine
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 # :log-audit 的策略单测
 junit4 = { module = "junit:junit", version = "4.13.2" }
+robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "ktxSerialization" }
 # aboutlibraries：core 提供 Libs 数据模型，compose-m3 提供许可列表 UI
 aboutlibraries-core = { module = "com.mikepenz:aboutlibraries-core", version.ref = "aboutLibraries" }

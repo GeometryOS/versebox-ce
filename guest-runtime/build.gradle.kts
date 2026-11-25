@@ -27,6 +27,9 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
     // 目录注入移到下面的 androidComponents 块（AGP 9 的 sourceSets 库路径会抛
     // ClassCastException: DefaultAndroidLibrarySourceSet -> AndroidLibrarySourceSet）。
 }
@@ -102,6 +105,11 @@ val verifyRuntime = tasks.register("verifyRuntime") {
         }
         logger.lifecycle("A10 runtime verified: $checked native files (payload layout)")
     }
+}
+
+dependencies {
+    testImplementation(libs.junit4)
+    testImplementation(libs.robolectric)
 }
 tasks.named("preBuild").configure { dependsOn(verifyRuntime) }
 

@@ -28,7 +28,7 @@ jobs:
         run: |
           set -euo pipefail
           ./gradlew --no-daemon --console=plain \
-            :log-audit:test :vm-display:test :vm-rom:test -PciSkipNativeVerify=true
+            :log-audit:test :vm-display:test :vm-rom:test :guest-runtime:testDebugUnitTest :app:testDebugUnitTest -PciSkipNativeVerify=true
       - name: 汇总测试结果
         if: always()
         run: |

@@ -61,11 +61,16 @@ class SnapshotPlanTest {
     }
 
     @Test
-    fun `whitelist matches the old collector set`() {
-        assertTrue(SnapshotPlan.wanted("startup-events.log"))
-        assertTrue(SnapshotPlan.wanted("vm/framework-server.log"))
-        assertTrue(SnapshotPlan.wanted("native-window/gpu-host.log"))
-        assertTrue(SnapshotPlan.wanted("runtime/a9exec.log"))
+    fun `operation log is archived ahead of framework logs`() {
+        val result = SnapshotPlan.plan(
+            listOf(
+                SnapshotSource("/runtime/operation.log", "runtime/operation.log", 128, 2),
+                SnapshotSource("/vm/framework-server.log", "vm/framework-server.log", 128, 3),
+            ),
+            policy,
+        )
+        assertEquals(listOf("runtime/operation.log", "vm/framework-server.log"), result.copies.map { it.stored })
+        assertTrue(SnapshotPlan.wanted("runtime/operation.log"))
         assertFalse(SnapshotPlan.wanted("rootfs/system/framework/framework.jar"))
         assertFalse(SnapshotPlan.wanted("vm/application-8891-1.log"))
     }
