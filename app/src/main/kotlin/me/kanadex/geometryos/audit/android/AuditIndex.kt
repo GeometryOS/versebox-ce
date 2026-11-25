@@ -90,6 +90,7 @@ object AuditIndex {
                 ScanRoot(runtime.absolutePath, "runtime/"),
                 ScanRoot(File(runtime, "vm").absolutePath, "runtime/vm/"),
             ),
+            expected = listOf("operation.log") + if (kind == RecordKind.LAUNCH) listOf("startup-events.log") else emptyList(),
         )
     }
 

@@ -4,14 +4,23 @@ import android.content.ContentValues
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import me.kanadex.geometryos.audit.ArchiveRequest
 import me.kanadex.geometryos.audit.ArchiveResult
+import me.kanadex.geometryos.audit.model.ArchiveOutcome
+import me.kanadex.geometryos.audit.policy.ScanRoot
 import me.kanadex.geometryos.audit.android.AuditBootstrap
 import me.kanadex.geometryos.audit.android.AuditIndex
 import me.kanadex.geometryos.audit.model.SessionId
 import io.a10vm.runtime.RomSpec
 import io.a10vm.runtime.VmDevice
+import io.a10vm.runtime.VmRegistry
 import io.a10vm.ui.settings.AppPreferences
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
+import org.json.JSONObject
 
 /**
  * 把一次操作「归档成一条记录」的采集器。
@@ -28,6 +37,62 @@ import java.io.File
  */
 object RecordCollector {
     private const val TAG = "A10VM_RECORDS"
+    private const val MAX_RUNTIME_OPERATION_LOG_BYTES = 512 * 1024
+    private val operationSequences = java.util.concurrent.ConcurrentHashMap<Long, java.util.concurrent.atomic.AtomicInteger>()
+    private val pendingMetaArchives = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.ConcurrentLinkedQueue<Job>>()
+
+    suspend fun awaitOperationArchives(vmId: String) {
+        val queue = pendingMetaArchives[vmId] ?: return
+        while (true) {
+            val job = queue.poll() ?: break
+            job.join()
+        }
+        if (queue.isEmpty()) pendingMetaArchives.remove(vmId, queue)
+    }
+
+    private fun runtimeOperationFile(context: Context, device: VmDevice): File =
+        File(VmRegistry.get(context).runtimeOf(device), "operation.log")
+
+    private fun writeOperationEvent(
+        file: File,
+        recordId: Long,
+        sequence: Int,
+        stage: String,
+        event: String,
+        message: String,
+        failure: Throwable? = null,
+    ) {
+        runCatching {
+            file.parentFile?.mkdirs()
+            if (file.length() >= MAX_RUNTIME_OPERATION_LOG_BYTES) return
+            val json = JSONObject()
+                .put("schema", "versebox-operation-log/1")
+                .put("operationId", recordId.toString())
+                .put("recordId", recordId)
+                .put("sequence", sequence)
+                .put("timestamp", System.currentTimeMillis())
+                .put("level", if (failure == null) "INFO" else "ERROR")
+                .put("stage", stage)
+                .put("event", event)
+                .put("message", message.take(MAX_EVENT_TEXT))
+            failure?.let { json.put("stackTrace", it.stackTraceToString().take(MAX_STACK_TEXT)) }
+            file.appendText(json.toString() + "\n", Charsets.UTF_8)
+        }.onFailure { Log.w(TAG, "操作日志写入失败 record=$recordId stage=$stage", it) }
+    }
+
+    fun appendOperation(
+        context: Context,
+        recordId: Long?,
+        device: VmDevice,
+        stage: String,
+        event: String,
+        message: String,
+        failure: Throwable? = null,
+    ) {
+        val id = recordId?.takeIf { it > 0L } ?: return
+        val sequence = operationSequences[id]?.getAndIncrement() ?: return
+        writeOperationEvent(runtimeOperationFile(context, device), id, sequence, stage, event, message, failure)
+    }
 
     /** 记录总开关。键名唯一来源在 AppPreferences.KEY_COLLECT_RECORDS。 */
     private fun enabled(context: Context): Boolean = context
@@ -53,6 +118,15 @@ object RecordCollector {
             put("host_model", "${Build.MANUFACTURER} ${Build.MODEL}")
         }
         val id = store.insert(values)
+        if (id > 0L) {
+            operationSequences[id] = java.util.concurrent.atomic.AtomicInteger(1)
+            runCatching {
+                val operationFile = runtimeOperationFile(context, device)
+                operationFile.parentFile?.mkdirs()
+                operationFile.writeText("", Charsets.UTF_8)
+                writeOperationEvent(operationFile, id, 0, kind.name, "accepted", "操作已登记")
+            }.onFailure { Log.w(TAG, "操作日志初始化失败 record=$id", it) }
+        }
         Log.i(TAG, "RECORD_BEGIN id=$id vm=${device.id} kind=$kind")
         id.takeIf { it > 0 }
     }.onFailure { Log.w(TAG, "RECORD_BEGIN 失败：${it.message}") }.getOrNull()
@@ -77,6 +151,8 @@ object RecordCollector {
         status: RecordStatus,
         detail: String,
         startedAt: Long = System.currentTimeMillis(),
+        operationEvents: List<String> = emptyList(),
+        failure: Throwable? = null,
     ) {
         if (!enabled(context)) return
         runCatching {
@@ -100,12 +176,105 @@ object RecordCollector {
                 put("app_version", info.versionName + " (" + info.longVersionCode + ")")
                 put("host_release", "Android " + Build.VERSION.RELEASE + " / API " + Build.VERSION.SDK_INT)
                 put("host_model", Build.MANUFACTURER + " " + Build.MODEL)
-                put("event_count", 0)
+                put("event_count", operationEvents.size + 3)
             }
             val id = store.insert(values)
+            if (id > 0L) {
+                val job = AuditBootstrap.scope.launch(Dispatchers.IO) {
+                    archiveMetaOperation(context.applicationContext, id, vmId, kind, status, startedAt, detail, operationEvents, failure)
+                }
+                pendingMetaArchives.getOrPut(vmId) { java.util.concurrent.ConcurrentLinkedQueue() }.add(job)
+            }
             Log.i(TAG, "RECORD_META id=$id vm=$vmId kind=$kind status=$status")
         }.onFailure { Log.w(TAG, "RECORD_META 失败：${it.message}") }
     }
+
+    private suspend fun archiveMetaOperation(
+        context: Context,
+        id: Long,
+        vmId: String,
+        kind: RecordKind,
+        status: RecordStatus,
+        startedAt: Long,
+        detail: String,
+        events: List<String>,
+        failure: Throwable?,
+    ) {
+        val recordsDir = File(context.filesDir, "records")
+        val source = File(recordsDir, ".operation-$id")
+        val target = File(recordsDir, archivePart(vmId) + "/" + id)
+        try {
+            source.deleteRecursively()
+            check(source.mkdirs()) { "无法创建操作日志目录" }
+            val device = VmRegistry.get(context).find(vmId)
+            val runtimeLog = device?.let { runtimeOperationFile(context, it) }
+            runtimeLog?.takeIf { it.isFile }?.copyTo(File(source, "operation.log"), overwrite = true)
+            val log = File(source, "operation.log")
+            if (!log.isFile) log.createNewFile()
+            val runtimeLines = log.readLines(Charsets.UTF_8)
+            val runtimeEvents = runtimeLines.size
+            if (runtimeLines.isEmpty()) {
+                writeOperationEvent(log, id, 0, kind.name, "accepted", "操作已登记")
+            }
+            log.outputStream().bufferedWriter(Charsets.UTF_8).use { writer ->
+                var sequence = if (runtimeLines.isEmpty()) 1 else runtimeEvents
+                fun event(name: String, message: String, stack: String? = null) {
+                    val json = JSONObject().put("schema", "versebox-operation-log/1")
+                        .put("operationId", id.toString()).put("recordId", id)
+                        .put("sequence", sequence++).put("timestamp", System.currentTimeMillis())
+                        .put("level", if (name == "exception") "ERROR" else "INFO")
+                        .put("stage", kind.name).put("event", name).put("message", message.take(MAX_EVENT_TEXT))
+                    if (stack != null) json.put("stackTrace", stack.take(MAX_STACK_TEXT))
+                    writer.appendLine(json.toString())
+                }
+                if (runtimeEvents == 0) event("accepted", "操作已登记")
+                events.forEach { event("step", it) }
+                event(if (failure == null) "completed" else "failed", detail)
+                failure?.let { event("exception", it.message ?: it.javaClass.name, it.stackTraceToString()) }
+            }
+            val result = AuditBootstrap.engine(context).archive(
+                ArchiveRequest(
+                    vmId = vmId,
+                    recordId = id,
+                    sessionId = SessionId.Legacy,
+                    kind = kind.name,
+                    status = status.name,
+                    outcome = AuditIndex.outcome(status, kind),
+                    targetDir = target.absolutePath,
+                    roots = listOf(ScanRoot(source.absolutePath, "")) + listOfNotNull(
+                        VmRegistry.get(context).find(vmId)?.let { vm ->
+                            File(AuditIndex.layout(context, vm).runtimeDir, "operation.log")
+                        }?.takeIf { it.isFile }?.let { ScanRoot(it.parentFile!!.absolutePath, "runtime/") },
+                    ),
+                    expected = listOf("operation.log"),
+                ),
+            )
+            when (result) {
+                is ArchiveResult.Success -> {
+                    RecordStore.get(context).update(id, ContentValues().apply {
+                        put("log_dir", relativeToFiles(context, target.absolutePath))
+                        put("event_count", runtimeEvents + events.size + 2 + if (failure == null) 0 else 1)
+                    })
+                    AuditBootstrap.emit(context, "operation_archive_written", mapOf("record" to id, "kind" to kind.name))
+                }
+                is ArchiveResult.Failed -> {
+                    AuditBootstrap.emit(context, "operation_archive_failed", mapOf("record" to id, "reason" to result.message))
+                    Log.w(TAG, "操作日志归档失败 id=$id：${result.message}")
+                }
+            }
+        } catch (problem: Throwable) {
+            AuditBootstrap.emit(context, "operation_archive_failed", mapOf("record" to id, "reason" to (problem.message ?: problem.javaClass.simpleName)))
+            Log.w(TAG, "操作日志归档失败 id=$id", problem)
+        } finally {
+            source.deleteRecursively()
+        }
+    }
+
+    private fun archivePart(value: String): String =
+        value.replace(Regex("[^A-Za-z0-9._-]"), "_").take(80).ifBlank { "unknown" }
+
+    private const val MAX_EVENT_TEXT = 8 * 1024
+    private const val MAX_STACK_TEXT = 128 * 1024
     /**
      * 收尾：归档 + 摘要 + 索引。
      *
@@ -124,6 +293,7 @@ object RecordCollector {
         runCatching {
             val store = RecordStore.get(context)
             val record = store.find(recordId) ?: return@runCatching
+            appendOperation(context, recordId, device, "operation", status.name.lowercase(), detail)
             val request = AuditIndex.archiveRequest(context, device, recordId, session, kind, status)
             val result = AuditBootstrap.engine(context).archive(request)
             val archiveFailure = (result as? ArchiveResult.Failed)?.message
@@ -162,6 +332,7 @@ object RecordCollector {
                 "RECORD_END id=$recordId vm=${device.id} kind=$kind status=$status " +
                     "files=${digest.count} archive=${if (archiveFailure == null) "ok" else archiveFailure}",
             )
+            operationSequences.remove(recordId)
         }.onFailure { Log.w(TAG, "RECORD_END 失败：${it.message}") }
     }
 

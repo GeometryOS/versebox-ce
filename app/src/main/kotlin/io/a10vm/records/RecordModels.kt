@@ -46,6 +46,11 @@ enum class RecordKind(val label: String) {
      * 审计事件同时在 audit.log 里留一条 `vm_rom_version_changed`。
      */
     ROM_VERSION("切换 ROM 版本"),
+
+    ROM_EXTRACT("解包 ROM"),
+    ROM_REPAIR("自动修复 ROM"),
+    ROM_REEXTRACT("重新解包 ROM"),
+    ROM_CLEAR_CACHE("清理解包体"),
 }
 
 enum class RecordStatus(val label: String) {

@@ -52,17 +52,21 @@ class ArchiveWriter(
 ) {
     fun write(request: ArchiveRequest, policy: AuditPolicy): ArchiveResult {
         val normalized = policy.normalized()
-        val target = request.targetDir.trimEnd('/')
-        val parent = target.substringBeforeLast('/', missingDelimiterValue = "")
-        if (parent.isEmpty()) return ArchiveResult.Failed("归档目录非法：${request.targetDir}")
-        val tmp = "$parent/.tmp-${request.recordId}"
+        val target = request.targetDir.trimEnd('/', '\\')
+        val separator = maxOf(target.lastIndexOf('/'), target.lastIndexOf('\\'))
+        if (separator <= 0) return ArchiveResult.Failed("归档目录非法：${request.targetDir}")
+        val parent = target.substring(0, separator)
+        val pathSeparator = target[separator]
+        val tmp = parent + pathSeparator + ".tmp-" + request.recordId
 
         val sources = ArrayList<SnapshotSource>()
         for (root in request.roots) {
             if (!fs.isDirectory(root.directory)) continue
             for (entry in fs.list(root.directory)) {
                 if (entry.directory) continue
-                val stored = root.prefix + entry.path.substringAfterLast('/')
+                // 文件名取最后一段，兼容 Windows 反斜杠绝对路径。
+                val name = entry.path.substringAfterLast('/').substringAfterLast('\\')
+                val stored = root.prefix + name
                 if (!SnapshotPlan.wanted(stored)) continue
                 sources += SnapshotSource(
                     path = entry.path,

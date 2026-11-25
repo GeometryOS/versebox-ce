@@ -50,6 +50,7 @@ object SnapshotPlan {
         return when {
             name == "startup-events.log" -> true
             name == "session-state.log" -> true
+            name == "operation.log" -> true
             name == "gpu-host.log" -> true
             name == "a9exec.log" -> true
             stored.contains("/framework-") && stored.endsWith(".log") -> true
@@ -68,7 +69,8 @@ object SnapshotPlan {
         return when {
             name == "startup-events.log" -> 0
             name == "session-state.log" -> 1
-            stored.contains("/framework-") && stored.endsWith(".log") -> 2
+            name == "operation.log" -> 2
+            stored.contains("/framework-") && stored.endsWith(".log") -> 3
             else -> 3
         }
     }

@@ -613,6 +613,11 @@ class AppState(private val context: Context) {
             detail = "ROM 版本：" + (rom?.nameWithVersion ?: romKey) +
                 (rom?.let { "（" + RomTexts.sourceLabel(it.source) + "）" } ?: "") +
                 (if (changed) "" else "（没有变化）"),
+            operationEvents = listOf(
+                "读取当前ROM身份完成 key=" + device.romId,
+                "注册表ROM身份写入和读回结果 ok=" + saved,
+                "审计事件vm_rom_version_changed已写入",
+            ),
         )
         refresh()
         refreshRoms()
@@ -731,6 +736,8 @@ class AppState(private val context: Context) {
             status = if (device != null) RecordStatus.SUCCESS else RecordStatus.FAILED,
             detail = detail,
             startedAt = started,
+            operationEvents = listOf("vm_instance注册表创建结果 ok=" + (device != null), "ROM身份保存 key=" + romId),
+            failure = result.exceptionOrNull(),
         )
         AuditBootstrap.emit(context, "vm_created", mapOf(
             "vm" to (device?.id ?: ""),
@@ -788,7 +795,8 @@ class AppState(private val context: Context) {
             apiLevel = rom?.apiLevel ?: 0,
             kind = RecordKind.DISPLAY,
             status = RecordStatus.SUCCESS,
-            detail = "分辨率：" + mode.title(host) + " · " + geometry.summary,
+            detail = "分辨率：" + mode.title(host) + "，" + geometry.summary,
+            operationEvents = listOf("读取宿主屏幕参数完成", "vm_registry显示模式写入与读回结果 ok=" + saved),
         )
         refresh()
         return true
@@ -902,6 +910,7 @@ class AppState(private val context: Context) {
     fun recordRename(device: VmDevice, ok: Boolean, detail: String) {
         scope.launch(Dispatchers.IO) {
             val id = RecordCollector.begin(context, device, romOf(device), RecordKind.RENAME) ?: return@launch
+            RecordCollector.appendOperation(context, id, device, "registry", "rename_completed", detail)
             RecordCollector.finish(
                 context,
                 id,

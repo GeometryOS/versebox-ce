@@ -453,9 +453,12 @@ class VmService : Service() {
                     delete(inst)
                     return@execute
                 }
-                // 缺文件自愈：payload 少了就从原始 ROM 包重解（等价于 A10/A9 的 assets 重拷）。
-                // STOP 不需要（停止不读 payload），其余动作进来先补一次。
-                if (action != STOP) inst.ensureRomUsable()
+                if (action != STOP) {
+                    RecordCollector.appendOperation(this, inst.recordId, inst.device, "integrity", "check_started", "检查所选ROM解包体")
+                    inst.ensureRomUsable()
+                    kotlinx.coroutines.runBlocking { RecordCollector.awaitOperationArchives("rom") }
+                    RecordCollector.appendOperation(this, inst.recordId, inst.device, "integrity", "check_completed", "ROM解包体完整，可以继续准备实例")
+                }
                 val session = sessionOf(inst)
                 when (action) {
                     INSPECT -> update(inst, if (session.alive) "RUNNING" else "IDLE", session.inspect())
@@ -520,13 +523,18 @@ class VmService : Service() {
                     }
                 }
             } catch (cancel: SessionCancelled) {
-                // 启动被用户取消：不是失败，不写 ERROR、不弹异常框。
+                RecordCollector.appendOperation(this, inst.recordId, inst.device, "operation", "cancelled", cancel.message ?: "用户取消")
                 update(inst, "IDLE", inst.name + " 已关机。")
             } catch (cancel: me.kanadex.geometryos.rom.RomCancelled) {
-                // 用户点了停止把自愈打断了：这不是失败，别写 ERROR 记录。
+                RecordCollector.appendOperation(this, inst.recordId, inst.device, "operation", "cancelled", cancel.message ?: "用户取消")
                 update(inst, "IDLE", "${inst.name} 已取消。")
-            } catch (failure: Exception) { failed(inst, failure, "操作失败") }
-            catch (failure: LinkageError) { failed(inst, failure, "原生组件装载失败") }
+            } catch (failure: Exception) {
+                RecordCollector.appendOperation(this, inst.recordId, inst.device, "operation", "exception", failure.message ?: "操作失败", failure)
+                failed(inst, failure, "操作失败")
+            } catch (failure: LinkageError) {
+                RecordCollector.appendOperation(this, inst.recordId, inst.device, "operation", "exception", failure.message ?: "原生组件装载失败", failure)
+                failed(inst, failure, "原生组件装载失败")
+            }
             finally {
                 // 这次操作到底做成了没有：记录中心用它决定 SUCCESS / FAILED，
                 // 不再靠 inst.state 反推（本轮真机就是"0/2 个应用导入成功"被记成 SUCCESS）。
