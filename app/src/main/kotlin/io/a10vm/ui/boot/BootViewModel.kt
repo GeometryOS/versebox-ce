@@ -137,12 +137,14 @@ class BootViewModel(
                 else -> when (val decision = RomVersionPolicy.decision(series, romId)) {
                     is RomVersionDecision.CurrentMissing -> RomGate(
                         title = BootTexts.GATE_NEED_VERSION_TITLE,
-                        message = decision.fallback?.let {
-                            BootTexts.gateMissingWithNewer(
-                                RomKeys.idOf(romId) + " " + RomKeys.versionOf(romId),
-                                it.nameWithVersion,
-                            )
-                        } ?: BootTexts.gateMissing(romId),
+                        message = decision.fallback
+                            ?.takeIf { RomKeys.compareVersions(it.version, RomKeys.versionOf(romId)) > 0 }
+                            ?.let {
+                                BootTexts.gateMissingWithNewer(
+                                    RomKeys.idOf(romId) + " " + RomKeys.versionOf(romId),
+                                    it.nameWithVersion,
+                                )
+                            } ?: BootTexts.gateMissing(romId),
                         openVersionText = BootTexts.GATE_OPEN_VERSION,
                     )
                     is RomVersionDecision.Unavailable -> RomGate(

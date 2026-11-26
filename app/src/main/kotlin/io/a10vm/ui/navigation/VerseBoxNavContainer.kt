@@ -273,9 +273,6 @@ fun VerseBoxNavContainer(uiState: ThemeState, mainContent: @Composable () -> Uni
         // 所以启动时的自动检测命中异常时，不管当前在哪个 tab 都能弹出来。
         ProcessLimitAlertHost(useMiuix = uiState.useMiuix)
 
-        // 「这个 ROM 有新版本 / 当前版本不在了」：同一层，两个分支共用同一套时序
-        // （docs/rom-package/14-版本管理/01 §3）。
-        io.a10vm.ui.rom.RomUpdateAlertHost(useMiuix = uiState.useMiuix)
     }
 }
 

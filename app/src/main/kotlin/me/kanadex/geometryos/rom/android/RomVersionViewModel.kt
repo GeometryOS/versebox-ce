@@ -20,6 +20,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.kanadex.geometryos.rom.RomRepository
 import me.kanadex.geometryos.rom.RomKeys
+import me.kanadex.geometryos.rom.RomGroup
+import me.kanadex.geometryos.rom.RomGrouping
+import me.kanadex.geometryos.rom.RomRow
 import me.kanadex.geometryos.rom.RomSwitch
 import me.kanadex.geometryos.rom.RomTexts
 import me.kanadex.geometryos.rom.RomVersionEntry
@@ -69,6 +72,7 @@ data class RomVersionState(
     // 顶部使用最新版本那一行，没有可用版本就是 null
     val latest: RomVersionOption? = null,
     val options: List<RomVersionOption> = emptyList(),
+    val romGroups: List<RomGroup> = emptyList(),
     val isLoading: Boolean = true,
     val confirm: RomVersionConfirm? = null,
     val restartPrompt: Boolean = false,
@@ -132,6 +136,7 @@ class RomVersionViewModel(
     val state: StateFlow<RomVersionState> = _state.asStateFlow()
 
     private var entries: List<RomVersionEntry> = emptyList()
+    private var romRows: List<RomRow> = emptyList()
     private var deviceRomId: String = ""
 
     // 这台虚拟机绑定的是哪一份。空 key 表示还没选
@@ -173,9 +178,14 @@ class RomVersionViewModel(
     private fun refresh() {
         scope.launch {
             val loaded = withContext(Dispatchers.IO) {
-                runCatching { appState.romVersions(deviceRomId) }.getOrElse { emptyList() }
+                val versions = runCatching { appState.romVersions(deviceRomId) }.getOrElse { emptyList() }
+                val rows = runCatching {
+                    repository.rows().filter { it.id == RomKeys.idOf(deviceRomId) }
+                }.getOrElse { emptyList() }
+                versions to rows
             }
-            entries = loaded
+            entries = loaded.first
+            romRows = loaded.second
             publish()
         }
     }
@@ -232,6 +242,7 @@ class RomVersionViewModel(
                 latestNewer = latestNewer,
                 latest = latest,
                 options = options,
+                romGroups = RomGrouping.groups(romRows, current?.rowId),
                 isLoading = false,
                 unavailable = entries.isEmpty(),
             )

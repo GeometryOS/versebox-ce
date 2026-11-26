@@ -2,6 +2,8 @@
 // Copyright (C) 2026 VerseBox contributors
 package io.a10vm.ui.page.miuix.vm
 
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.Modifier
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -15,9 +17,14 @@ import io.a10vm.ui.page.miuix.widgets.MiuixBlockingLoadingDialog
 import io.a10vm.ui.page.miuix.widgets.MiuixConfirmDialog
 import io.a10vm.ui.page.miuix.widgets.MiuixNoticeDialog
 import io.a10vm.ui.page.miuix.widgets.MiuixSettingsScaffold
+import io.a10vm.ui.page.miuix.widgets.MiuixStatusCard
+import io.a10vm.ui.page.miuix.widgets.miuixCardInset
 import io.a10vm.ui.page.miuix.widgets.miuixSection
 import io.a10vm.ui.vm.VmActions
 import io.a10vm.ui.verse.LocalAppState
+import me.kanadex.geometryos.rom.RomListAction
+import me.kanadex.geometryos.rom.rememberRomListViewModel
+import top.yukonga.miuix.kmp.basic.SmallTitle
 import me.kanadex.geometryos.rom.RomTexts
 import me.kanadex.geometryos.rom.android.RomVersionAction
 import me.kanadex.geometryos.rom.android.rememberRomVersionViewModel
@@ -28,15 +35,8 @@ import top.yukonga.miuix.kmp.basic.SnackbarHostState
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
- * ROM 版本管理（Miuix 分支）。
- *
- * 版式与「分辨率」页**逐项相同**（`docs/rom-package/14-版本管理/01` §2）：
- *  - 顶部单独一档「使用最新版本」；
- *  - 下面一档是同一个 ROM 系列的全部版本（标题带版本号：`Android 15 V1.0.1`）；
- *  - 选中项在 `endActions` 打一个库的 [Icon] 勾；没有自造行、没有自造选中态。
- *
- * 页面只渲染 + `dispatch(...)`：切哪个版本、要不要警告、要不要重启全部由
- * [me.kanadex.geometryos.rom.android.RomVersionViewModel] 与 `:vm-rom` 的策略决定。
+ * ROM 版本管理（Miuix 分支）。版本行复用 ROM 管理卡片与 RomItem 状态；
+ * 页面特有内容只有最新版本选择与缺失版本警告。
  */
 @Composable
 fun MiuixRomVersionPage(id: String, useBlur: Boolean) {
@@ -44,8 +44,14 @@ fun MiuixRomVersionPage(id: String, useBlur: Boolean) {
     val context = LocalContext.current
     val appState = LocalAppState.current
     val viewModel = rememberRomVersionViewModel(id)
+    val romListViewModel = rememberRomListViewModel()
+    val romListState by romListViewModel.state.collectAsStateWithLifecycle()
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(romListState.rows) {
+        viewModel.dispatch(RomVersionAction.Refresh)
+    }
 
     // 关机收尾完成：**先**退出两级页面并回到主页虚拟机 tab，**再**按标准入口启动。
     // 顺序不能反（docs/display-settings/02 §3），也不在这里接管启动过程。
@@ -75,13 +81,20 @@ fun MiuixRomVersionPage(id: String, useBlur: Boolean) {
     ) {
         // 「为什么你会被带到这里」：当前版本已经不在了。这一行不可点，只说明事实与出路。
         if (state.selectedMissing) {
-            miuixSection {
-                BasicComponent(
+            item {
+                MiuixStatusCard(
+                    modifier = Modifier.miuixCardInset(),
                     title = RomTexts.MISSING_VERSION_TITLE,
-                    summary = RomTexts.missingVersionSummary(
+                    description = RomTexts.missingVersionSummary(
                         state.currentText,
                         state.latest?.takeIf { state.latestNewer }?.title,
                     ),
+                    containerColor = MiuixTheme.colorScheme.errorContainer,
+                    contentColor = MiuixTheme.colorScheme.onErrorContainer,
+                    iconTint = MiuixTheme.colorScheme.error,
+                    actionText = "请选择一个仍然存在的 ROM 版本",
+                    icon = AppMiuixIcons.Info,
+                    onClick = {},
                 )
             }
         }
@@ -107,40 +120,41 @@ fun MiuixRomVersionPage(id: String, useBlur: Boolean) {
             }
         }
 
-        // 下面一档：同系列的全部版本。
-        miuixSection(RomTexts.versionGroupTitle(state.romName)) {
-            when {
-                state.isLoading -> BasicComponent(
-                    title = "正在读取版本…",
-                    summary = state.currentText,
-                )
-
-                state.isEmpty -> BasicComponent(
-                    title = "没有可用的版本",
-                    summary = "先导入这个系列的 ROM 包",
-                    // 直接叠一层 ROM 列表：返回还能回到版本管理页（不是被扔回主页）。
+        if (state.isLoading || state.isEmpty) {
+            miuixSection {
+                BasicComponent(
+                    title = if (state.isLoading) "正在读取版本…" else "没有可用的版本",
+                    summary = if (state.isLoading) null else "先导入这个系列的 ROM 包",
+                    enabled = !state.isLoading,
                     onClick = { navigator.push(Route.RomList()) },
                 )
-
-                else -> state.options.forEach { option ->
-                    BasicComponent(
-                        title = option.title,
-                        summary = option.summary,
-                        enabled = option.enabled || option.selected,
-                        onClick = { viewModel.dispatch(RomVersionAction.Select(option.rowId)) },
-                        endActions = {
-                            if (option.selected) {
-                                Icon(
-                                    imageVector = AppMiuixIcons.Ok,
-                                    contentDescription = "正在使用",
-                                    tint = MiuixTheme.colorScheme.primary,
-                                )
-                            }
-                        },
-                    )
-                }
             }
         }
+        state.romGroups.forEach { group ->
+            item(key = "group-" + group.title) { SmallTitle(text = group.title) }
+            items(group.items, key = { it.rowId }) { rom ->
+                MiuixRomCard(
+                    rom = rom,
+                    pickMode = false,
+                    versionMode = true,
+                    onSelectVersion = { viewModel.dispatch(RomVersionAction.Select(rom.rowId)) },
+                    onOpen = { navigator.push(Route.RomDetail(rom.rowId, false)) },
+                    onDelete = { romListViewModel.dispatch(RomListAction.RequestDelete(rom.rowId)) },
+                    onCheck = { romListViewModel.dispatch(RomListAction.CheckRom(rom.rowId)) },
+                    onRepair = { romListViewModel.dispatch(RomListAction.RequestRepair(rom.rowId)) },
+                    onClearCache = { romListViewModel.dispatch(RomListAction.RequestClearCache(rom.rowId)) },
+                    onCreate = {},
+                    onPick = {},
+                )
+            }
+        }
+    }
+
+    MiuixRomOperationDialogs(romListState, romListViewModel::dispatch)
+    LaunchedEffect(romListState.message) {
+        val message = romListState.message ?: return@LaunchedEffect
+        romListViewModel.dispatch(RomListAction.ConsumeMessage)
+        snackbarHostState.showSnackbar(message)
     }
 
     // 同版本不同内容 / 降级：标准确认框（标题与正文来自 :vm-rom）。

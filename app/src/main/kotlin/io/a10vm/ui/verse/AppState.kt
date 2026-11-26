@@ -95,20 +95,6 @@ data class RomFocus(
 )
 
 /**
- * 启动前要问用户的一句话：这个 ROM 有更新 / 当前选中的版本已经不在了。
- *
- * 文案与按钮在逻辑层算好（`docs/rom-package/14-版本管理/01` §3），页面只画。
- * [forced] = 当前版本已经不可用：只有一个按钮，且**不许启动**。
- */
-data class RomUpdatePrompt(
-    val vmId: String,
-    val title: String,
-    val message: String,
-    val confirmText: String,
-    val dismissText: String?,
-)
-
-/**
  * 应用级状态：虚拟机注册表 + 运行态 + 日志通道。
  *
  * 生命周期跟 Activity 走（[bind]/[unbind]），但对象本身在 Compose 树顶层只建一次，
@@ -320,17 +306,6 @@ class AppState(private val context: Context) {
     var vmRomVersionRequest by mutableStateOf<String?>(null)
         private set
 
-    /** 启动前要问用户的一句话（有新版本 / 当前版本不在了）。 */
-    var romUpdatePrompt by mutableStateOf<RomUpdatePrompt?>(null)
-        private set
-
-    /**
-     * 这一次 App 运行里已经问过"要不要更新"的 (虚拟机, 目标版本)。
-     *
-     * 只活在内存里：重启 App 后会再问一次（用户可能忘了），但不许每次点启动都弹。
-     */
-    private val romUpdateAsked = java.util.Collections.synchronizedSet(mutableSetOf<String>())
-
     /** 修复完成后请求这台虚拟机重新启动（`09/04` §2 第 6 步）。 */
     var vmRestartRequest by mutableStateOf<String?>(null)
         private set
@@ -450,25 +425,8 @@ class AppState(private val context: Context) {
                     return@launch
                 }
 
-                // 可选：有更新的版本，问一句；用户说"继续启动"就用当前这一份。
-                // 同一次 App 运行里，同一个 (虚拟机, 目标版本) 只问一次——旧实例每次启动都问
-                // 就是骚扰（与"系统在限制子进程"的弹法是同一条规矩）。
-                is RomVersionDecision.UpdateAvailable -> {
-                    if (!romUpdateAsked.add(id + "@" + decision.latest.key)) {
-                        beginStart(vm)
-                        return@launch
-                    }
-                    romUpdatePrompt = RomUpdatePrompt(
-                        vmId = id,
-                        title = RomTexts.UPDATE_TITLE,
-                        // 文案只认"这一次结论"：同版本换来源（内容相同）也是可切换的一步，
-                        // 与"同版本不同内容"是两句话，页面不许自己拼（docs/ui-rework/10 §2.6）。
-                        message = RomTexts.updateMessage(decision),
-                        confirmText = RomTexts.UPDATE_CONFIRM,
-                        dismissText = RomTexts.UPDATE_LATER,
-                    )
-                    return@launch
-                }
+                // 版本更新提示由启动页 Activity 的启动闸门唯一呈现，闸门结论出来前不发 START。
+                is RomVersionDecision.UpdateAvailable -> return@launch
 
                 else -> Unit
             }
@@ -527,27 +485,6 @@ class AppState(private val context: Context) {
         if (romId.isNullOrEmpty()) return emptyList()
         return romRepo.versionEntries()[RomKeys.idOf(romId)].orEmpty()
             .let { RomVersionPolicy.series(it, RomKeys.idOf(romId)) }
-    }
-
-    /** 消费一次性提示（消费即清，防转屏/切 tab 重复弹）。 */
-    fun consumeRomUpdatePrompt(): RomUpdatePrompt? = romUpdatePrompt.also { romUpdatePrompt = null }
-
-    /**
-     * 用户选择「继续启动」：跳过版本闸门直接启动。
-     *
-     * 与 [start] 分开是必须的——共用的话点一次弹一次，用户永远开不了机。
-     */
-    fun resumeStart(vmId: String) {
-        // 「继续启动」只跳过**版本提示**，不跳过"窗口 → START"的顺序，也不跳过解包体检查。
-        scope.launch {
-            val vm = device(vmId) ?: registry.find(vmId) ?: return@launch
-            val broken = brokenRom(vm)
-            if (broken != null) {
-                focusRom(broken.key, repairVmId = vmId, rowId = broken.rowId)
-                return@launch
-            }
-            beginStart(vm)
-        }
     }
 
     /** 直接打开版本管理页（VM 管理页入口）。 */

@@ -33,6 +33,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.a10vm.ui.icons.AppIcons
 import io.a10vm.ui.navigation.LocalNavigator
 import io.a10vm.ui.navigation.Route
+import io.a10vm.ui.page.main.widget.card.StatusCard
 import io.a10vm.ui.page.main.widget.setting.BlockingLoadingIndicator
 import io.a10vm.ui.page.main.widget.setting.RadioButtonWidget
 import io.a10vm.ui.page.main.widget.setting.NavigationItemWidget
@@ -42,16 +43,17 @@ import io.a10vm.ui.theme.rememberMaterial3BlurBackdrop
 import io.a10vm.ui.theme.verseBoxMaterial3BlurEffect
 import io.a10vm.ui.vm.VmActions
 import io.a10vm.ui.verse.LocalAppState
+import me.kanadex.geometryos.rom.RomConfirmKind
+import me.kanadex.geometryos.rom.RomListAction
+import me.kanadex.geometryos.rom.RomListMode
 import me.kanadex.geometryos.rom.RomTexts
+import me.kanadex.geometryos.rom.rememberRomListViewModel
 import me.kanadex.geometryos.rom.android.RomVersionAction
 import me.kanadex.geometryos.rom.android.rememberRomVersionViewModel
 
 /**
- * ROM 版本管理（Material 3 Expressive 分支）。
- *
- * 与 Miuix 分支共用同一个 ViewModel 与同一份文案；
- * 单选列表用组件库的 [RadioButtonWidget]（BaseWidget + M3 RadioButton，语义与选中态都由库画），
- * 页面不手写选择行、不自己画对勾（`docs/ui-rework/01` §5.7）。
+ * ROM 版本管理（Material 3 Expressive 分支）。版本行直接复用 ROM 管理卡片与 RomItem 状态；
+ * 最新版本仍使用单选组件，缺失提示沿用主页状态卡。
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -60,11 +62,17 @@ fun RomVersionPage(id: String, useBlur: Boolean) {
     val context = LocalContext.current
     val appState = LocalAppState.current
     val viewModel = rememberRomVersionViewModel(id)
+    val romListViewModel = rememberRomListViewModel(RomListMode.Manage)
+    val romListState by romListViewModel.state.collectAsStateWithLifecycle()
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val topAppBarState = rememberTopAppBarState()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(topAppBarState)
     val backdrop = rememberMaterial3BlurBackdrop(useBlur)
+
+    LaunchedEffect(romListState.rows) {
+        viewModel.dispatch(RomVersionAction.Refresh)
+    }
 
     // 时序与 Miuix 分支逐项相同：先退出两级页面 + 回到虚拟机 tab，再按标准入口启动。
     LaunchedEffect(state.restartCompleted) {
@@ -119,19 +127,18 @@ fun RomVersionPage(id: String, useBlur: Boolean) {
             // 「为什么你会被带到这里」：当前版本已经不在了。
             if (state.selectedMissing) {
                 item(key = "missing") {
-                    SegmentedColumn(title = RomTexts.VERSION_PAGE_TITLE) {
-                        item {
-                            NavigationItemWidget(
-                                icon = AppIcons.Android,
-                                title = RomTexts.MISSING_VERSION_TITLE,
-                                description = RomTexts.missingVersionSummary(
-                                    state.currentText,
-                                    state.latest?.takeIf { state.latestNewer }?.title,
-                                ),
-                                onClick = {},
-                            )
-                        }
-                    }
+                    StatusCard(
+                        title = RomTexts.MISSING_VERSION_TITLE,
+                        description = RomTexts.missingVersionSummary(
+                            state.currentText,
+                            state.latest?.takeIf { state.latestNewer }?.title,
+                        ),
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                        onClick = {},
+                        actionText = "请选择一个仍然存在的 ROM 版本",
+                        icon = AppIcons.Android,
+                    )
                 }
             }
             state.latest?.let { latest ->
@@ -149,38 +156,37 @@ fun RomVersionPage(id: String, useBlur: Boolean) {
                 }
             }
 
-            item(key = "versions") {
-                SegmentedColumn(title = RomTexts.versionGroupTitle(state.romName)) {
-                    when {
-                        state.isLoading -> item(key = "loading") {
-                            RadioButtonWidget(
-                                title = "正在读取版本…",
-                                description = state.currentText,
-                                selected = false,
-                                enabled = false,
-                                onClick = {},
+            if (state.isLoading || state.isEmpty) {
+                item(key = "versions-empty") {
+                    SegmentedColumn(title = RomTexts.versionGroupTitle(state.romName)) {
+                        item {
+                            NavigationItemWidget(
+                                icon = AppIcons.Android,
+                                title = if (state.isLoading) "正在读取版本…" else "没有可用的版本",
+                                description = if (state.isLoading) "正在读取本地和内置 ROM" else "先导入这个系列的 ROM 包",
+                                onClick = { if (!state.isLoading) navigator.push(Route.RomList()) },
                             )
                         }
-
-                        state.isEmpty -> item(key = "empty") {
-                            RadioButtonWidget(
-                                title = "没有可用的版本",
-                                description = "先导入这个系列的 ROM 包",
-                                selected = false,
-                                onClick = {
-                                    navigator.popUntil { key -> key is Route.Main }
-                                    navigator.push(Route.RomList())
-                                },
-                            )
-                        }
-
-                        else -> state.options.forEach { option ->
-                            item(key = option.uiKey) {
-                                RadioButtonWidget(
-                                    title = option.title,
-                                    description = option.summary,
-                                    selected = option.selected,
-                                    onClick = { viewModel.dispatch(RomVersionAction.Select(option.rowId)) },
+                    }
+                }
+            }
+            state.romGroups.forEach { group ->
+                item(key = "group-" + group.title) {
+                    SegmentedColumn(title = group.title) {
+                        group.items.forEach { rom ->
+                            item(key = rom.rowId) { _ ->
+                                RomRow(
+                                    rom = rom,
+                                    pickMode = false,
+                                    versionMode = true,
+                                    onSelectVersion = { viewModel.dispatch(RomVersionAction.Select(rom.rowId)) },
+                                    onOpen = { navigator.push(Route.RomDetail(rom.rowId, false)) },
+                                    onDelete = { romListViewModel.dispatch(RomListAction.RequestDelete(rom.rowId)) },
+                                    onCheck = { romListViewModel.dispatch(RomListAction.CheckRom(rom.rowId)) },
+                                    onRepair = { romListViewModel.dispatch(RomListAction.RequestRepair(rom.rowId)) },
+                                    onClearCache = { romListViewModel.dispatch(RomListAction.RequestClearCache(rom.rowId)) },
+                                    onCreate = {},
+                                    onPick = {},
                                 )
                             }
                         }
@@ -188,6 +194,13 @@ fun RomVersionPage(id: String, useBlur: Boolean) {
                 }
             }
         }
+    }
+
+    RomOperationDialogs(romListState, romListViewModel::dispatch, backdrop)
+    LaunchedEffect(romListState.message) {
+        val message = romListState.message ?: return@LaunchedEffect
+        romListViewModel.dispatch(RomListAction.ConsumeMessage)
+        snackbarHostState.showSnackbar(message)
     }
 
     state.confirm?.let { confirm ->

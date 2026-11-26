@@ -191,50 +191,7 @@ fun RomListPage(useBlur: Boolean, mode: RomListMode = RomListMode.Manage) {
         }
     }
 
-    BlockingLoadingIndicator(visible = state.busy, text = state.busyText, backdrop = backdrop)
-
-    state.confirm?.let { confirm ->
-        AlertDialog(
-            onDismissRequest = { viewModel.dispatch(RomListAction.DismissDelete) },
-            title = { Text(confirm.title) },
-            text = { Text(confirm.message) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        when (confirm.kind) {
-                            RomConfirmKind.Delete -> viewModel.dispatch(RomListAction.ConfirmDelete)
-                            RomConfirmKind.ClearCache -> viewModel.dispatch(RomListAction.ConfirmClearCache)
-                            RomConfirmKind.Repair -> viewModel.dispatch(RomListAction.ConfirmRepair)
-                        }
-                    },
-                ) {
-                    Text(confirm.confirmText)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { viewModel.dispatch(RomListAction.DismissDelete) }) {
-                    Text("取消")
-                }
-            },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        )
-    }
-
-    // 只有一个按钮的告知（检查出问题但原包不在）：M3 的 AlertDialog 天然支持只给 confirmButton，
-    // 不给 dismissButton 就不会画出假的「取消」。
-    state.notice?.let { notice ->
-        AlertDialog(
-            onDismissRequest = { viewModel.dispatch(RomListAction.DismissNotice) },
-            title = { Text(notice.title) },
-            text = { Text(notice.message) },
-            confirmButton = {
-                TextButton(onClick = { viewModel.dispatch(RomListAction.DismissNotice) }) {
-                    Text(notice.confirmText)
-                }
-            },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        )
-    }
+    RomOperationDialogs(state, viewModel::dispatch, backdrop)
 
     // 定位：修复链带过来的 key 落到对应组（09/04 §2 第 4 步）。
     LaunchedEffect(state.highlightKey, state.blinkToken) {
@@ -253,6 +210,58 @@ fun RomListPage(useBlur: Boolean, mode: RomListMode = RomListMode.Manage) {
         val id = state.createdVmId ?: return@LaunchedEffect
         viewModel.dispatch(RomListAction.ConsumeCreated)
         navigator.push(Route.VmManage(id))
+    }
+}
+
+@Composable
+internal fun RomOperationDialogs(
+    state: me.kanadex.geometryos.rom.RomListState,
+    dispatch: (RomListAction) -> Unit,
+    backdrop: top.yukonga.miuix.kmp.blur.LayerBackdrop?,
+) {
+    BlockingLoadingIndicator(visible = state.busy, text = state.busyText, backdrop = backdrop)
+
+    state.confirm?.let { confirm ->
+        AlertDialog(
+            onDismissRequest = { dispatch(RomListAction.DismissDelete) },
+            title = { Text(confirm.title) },
+            text = { Text(confirm.message) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        when (confirm.kind) {
+                            RomConfirmKind.Delete -> dispatch(RomListAction.ConfirmDelete)
+                            RomConfirmKind.ClearCache -> dispatch(RomListAction.ConfirmClearCache)
+                            RomConfirmKind.Repair -> dispatch(RomListAction.ConfirmRepair)
+                        }
+                    },
+                ) {
+                    Text(confirm.confirmText)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { dispatch(RomListAction.DismissDelete) }) {
+                    Text("取消")
+                }
+            },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        )
+    }
+
+    // 只有一个按钮的告知（检查出问题但原包不在）：M3 的 AlertDialog 天然支持只给 confirmButton，
+    // 不给 dismissButton 就不会画出假的「取消」。
+    state.notice?.let { notice ->
+        AlertDialog(
+            onDismissRequest = { dispatch(RomListAction.DismissNotice) },
+            title = { Text(notice.title) },
+            text = { Text(notice.message) },
+            confirmButton = {
+                TextButton(onClick = { dispatch(RomListAction.DismissNotice) }) {
+                    Text(notice.confirmText)
+                }
+            },
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        )
     }
 }
 
@@ -278,7 +287,7 @@ private fun romGroupIndex(groups: List<RomGroup>, key: String, isLoading: Boolea
 
 /** 一个 ROM 行：`BaseItemContainer` 承担分组形状与底色，行内只有库组件。 */
 @Composable
-private fun RomRow(
+internal fun RomRow(
     rom: RomItem,
     pickMode: Boolean,
     onOpen: () -> Unit,
@@ -290,6 +299,8 @@ private fun RomRow(
     onPick: () -> Unit,
     highlight: Boolean = false,
     onHighlightFinished: () -> Unit = {},
+    versionMode: Boolean = false,
+    onSelectVersion: () -> Unit = {},
 ) {
     // 定位反馈：2 × 400 ms 的 alpha 脉冲（09/05 §3）。行本身仍是库组件，只有 alpha 由动画驱动。
     val pulse = remember { Animatable(1f) }
@@ -393,13 +404,14 @@ private fun RomRow(
                 }
             }
             Spacer(modifier = Modifier.weight(1f))
-            if (pickMode) {
-                // 「已选」= 组件 enabled=false 的禁用态（偏灰偏浅由库给），不是自己加 alpha。
-                TextButton(onClick = onPick, enabled = rom.canUse && !rom.selected) {
+            when {
+                versionMode -> TextButton(onClick = onSelectVersion, enabled = rom.canUse && !rom.selected) {
+                    Text(if (rom.selected) "正在使用" else "切换到此版本")
+                }
+                pickMode -> TextButton(onClick = onPick, enabled = rom.canUse && !rom.selected) {
                     Text(if (rom.selected) RomTexts.PICKED_ACTION else RomTexts.PICK_ACTION)
                 }
-            } else {
-                TextButton(onClick = onCreate, enabled = rom.canUse) {
+                else -> TextButton(onClick = onCreate, enabled = rom.canUse) {
                     Text("新建虚拟机")
                 }
             }

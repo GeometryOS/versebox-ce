@@ -151,35 +151,7 @@ fun MiuixRomListPage(useBlur: Boolean, mode: RomListMode = RomListMode.Manage) {
         }
     }
 
-    MiuixBlockingLoadingDialog(visible = state.busy, text = state.busyText)
-
-    state.confirm?.let { confirm ->
-        MiuixConfirmDialog(
-            show = true,
-            title = confirm.title,
-            message = confirm.message,
-            confirmText = confirm.confirmText,
-            onConfirm = {
-                when (confirm.kind) {
-                    RomConfirmKind.Delete -> viewModel.dispatch(RomListAction.ConfirmDelete)
-                    RomConfirmKind.ClearCache -> viewModel.dispatch(RomListAction.ConfirmClearCache)
-                    RomConfirmKind.Repair -> viewModel.dispatch(RomListAction.ConfirmRepair)
-                }
-            },
-            onDismissRequest = { viewModel.dispatch(RomListAction.DismissDelete) },
-        )
-    }
-
-    // 只有一个按钮的告知（检查出问题但原包不在）：用同一副骨架、去掉「取消」。
-    state.notice?.let { notice ->
-        MiuixNoticeDialog(
-            show = true,
-            title = notice.title,
-            message = notice.message,
-            confirmText = notice.confirmText,
-            onDismissRequest = { viewModel.dispatch(RomListAction.DismissNotice) },
-        )
-    }
+    MiuixRomOperationDialogs(state, viewModel::dispatch)
 
     // 一次性提示：走骨架的 Snackbar，不自己弹对话框。
     LaunchedEffect(state.message) {
@@ -196,6 +168,42 @@ fun MiuixRomListPage(useBlur: Boolean, mode: RomListMode = RomListMode.Manage) {
     }
 }
 
+@Composable
+internal fun MiuixRomOperationDialogs(
+    state: me.kanadex.geometryos.rom.RomListState,
+    dispatch: (RomListAction) -> Unit,
+    ) {
+    MiuixBlockingLoadingDialog(visible = state.busy, text = state.busyText)
+
+    state.confirm?.let { confirm ->
+        MiuixConfirmDialog(
+            show = true,
+            title = confirm.title,
+            message = confirm.message,
+            confirmText = confirm.confirmText,
+            onConfirm = {
+                when (confirm.kind) {
+                    RomConfirmKind.Delete -> dispatch(RomListAction.ConfirmDelete)
+                    RomConfirmKind.ClearCache -> dispatch(RomListAction.ConfirmClearCache)
+                    RomConfirmKind.Repair -> dispatch(RomListAction.ConfirmRepair)
+                }
+            },
+            onDismissRequest = { dispatch(RomListAction.DismissDelete) },
+        )
+    }
+
+    // 只有一个按钮的告知（检查出问题但原包不在）：用同一副骨架、去掉「取消」。
+    state.notice?.let { notice ->
+        MiuixNoticeDialog(
+            show = true,
+            title = notice.title,
+            message = notice.message,
+            confirmText = notice.confirmText,
+            onDismissRequest = { dispatch(RomListAction.DismissNotice) },
+        )
+    }
+}
+
 /**
  * 一个 ROM 行。
  *
@@ -208,7 +216,7 @@ fun MiuixRomListPage(useBlur: Boolean, mode: RomListMode = RomListMode.Manage) {
  * 只有 alpha 由动画驱动（属于动画，不是自造控件）。
  */
 @Composable
-private fun MiuixRomCard(
+internal fun MiuixRomCard(
     rom: RomItem,
     pickMode: Boolean,
     onOpen: () -> Unit,
@@ -220,6 +228,8 @@ private fun MiuixRomCard(
     onPick: () -> Unit,
     highlight: Boolean = false,
     onHighlightFinished: () -> Unit = {},
+    versionMode: Boolean = false,
+    onSelectVersion: () -> Unit = {},
 ) {
     val pulse = remember { Animatable(1f) }
     LaunchedEffect(highlight) {
@@ -334,17 +344,20 @@ private fun MiuixRomCard(
                 }
             }
             Spacer(modifier = Modifier.weight(1f))
-            if (pickMode) {
-                // 「已选」= 组件 enabled=false 的禁用态（偏灰偏浅由库给），不是自己加 alpha
-                // （docs/ui-rework/03 §8）。
-                TextButton(
+            when {
+                versionMode -> TextButton(
+                    text = if (rom.selected) "正在使用" else "切换到此版本",
+                    enabled = rom.canUse && !rom.selected,
+                    onClick = onSelectVersion,
+                    colors = ButtonDefaults.textButtonColorsPrimary(),
+                )
+                pickMode -> TextButton(
                     text = if (rom.selected) RomTexts.PICKED_ACTION else RomTexts.PICK_ACTION,
                     enabled = rom.canUse && !rom.selected,
                     onClick = onPick,
                     colors = ButtonDefaults.textButtonColorsPrimary(),
                 )
-            } else if (rom.canUse) {
-                TextButton(
+                rom.canUse -> TextButton(
                     text = "新建虚拟机",
                     onClick = onCreate,
                     colors = ButtonDefaults.textButtonColorsPrimary(),
