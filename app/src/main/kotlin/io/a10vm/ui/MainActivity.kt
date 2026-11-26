@@ -6,6 +6,8 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.setContent
 import io.a10vm.ui.settings.AppPreferences
 import io.a10vm.ui.verse.AppState
@@ -28,8 +30,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         preferences = AppPreferences.get(this)
         state = AppState(this)
-        // 系统栏图标由 VerseBoxTheme 在 Compose 里设置：setContent 之后 DecorView 才存在，
-        // 在这里调 window.insetsController 会空指针（已踩过一次）。
+        // Compose owns the background and icon appearance in both system-bar regions.
+        val transparentBars = SystemBarStyle.auto(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+        enableEdgeToEdge(statusBarStyle = transparentBars, navigationBarStyle = transparentBars)
         consumeIntent(intent)
         setContent {
             VerseBoxApp(preferences, state)

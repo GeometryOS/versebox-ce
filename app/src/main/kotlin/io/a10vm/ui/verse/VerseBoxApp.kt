@@ -8,8 +8,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
+import io.a10vm.ui.MainActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.a10vm.ui.navigation.Material3MainPageWrapper
 import io.a10vm.ui.navigation.MiuixMainPageWrapper
@@ -33,6 +37,14 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 fun VerseBoxApp(preferences: AppPreferences, state: AppState) {
     val theme by preferences.theme.collectAsStateWithLifecycle()
     VerseBoxTheme(theme) {
+        val view = LocalView.current
+        val dark = VerseBoxTheme.isDark
+        val window = (view.context as? MainActivity)?.window
+        if (window != null && !view.isInEditMode) {
+            SideEffect {
+                WindowCompat.getInsetsController(window, view).isAppearanceLightNavigationBars = !dark
+            }
+        }
         val layoutInfo = rememberWindowLayoutInfo()
         CompositionLocalProvider(
             LocalAppState provides state,
