@@ -850,7 +850,10 @@ class RomRepository private constructor(context: Context) {
         if (key.isEmpty()) return false
         if (layout.archiveFor(key, payloadSha256).isFile) return true
         if (payloadSha256.isEmpty() && layout.archive(key).isFile) return true
-        return builtinProperties().any { it.properties.key == key }
+        return builtinProperties().any {
+            it.properties.key == key &&
+                (payloadSha256.isEmpty() || it.properties.payloadSha256 == payloadSha256)
+        }
     }
 
     /**
@@ -867,7 +870,10 @@ class RomRepository private constructor(context: Context) {
             val legacySha = runCatching { RomPackage.read(legacy).payloadSha256 }.getOrDefault("")
             if (payloadSha256.isEmpty() || legacySha.isEmpty() || legacySha == payloadSha256) return legacy
         }
-        val builtin = builtinProperties().firstOrNull { it.properties.key == key } ?: return null
+        val builtin = builtinProperties().firstOrNull {
+            it.properties.key == key &&
+                (payloadSha256.isEmpty() || it.properties.payloadSha256 == payloadSha256)
+        } ?: return null
         if (builtin.properties.placeholder) {
             throw RomException(
                 "安装包里只有 " + key + " 的占位自述，没有 payload。请导入完整的 ROM 包后再使用。",
@@ -1000,8 +1006,8 @@ class RomRepository private constructor(context: Context) {
         // 1) 精确身份：romKey + 内容指纹。同版本两份内容时**只有这一档**是安全的，
         //    否则会把 A 那份的 romRoot 交给正在用 B 的实例（切换看起来成功、实际没换）。
         if (payloadSha256.isNotEmpty()) {
-            ready.firstOrNull { it.key == romId && it.payloadSha256 == payloadSha256 }
-                ?.let { return specOf(it) }
+            return ready.firstOrNull { it.key == romId && it.payloadSha256 == payloadSha256 }
+                ?.let(::specOf)
         }
         // 2) 只记了 romKey（旧实例）：取这一行的第一份（同 key 多份时优先没指纹的那条）。
         val sameKey = ready.filter { it.key == romId }

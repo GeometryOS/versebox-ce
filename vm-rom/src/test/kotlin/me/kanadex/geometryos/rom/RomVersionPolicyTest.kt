@@ -220,6 +220,20 @@ class RomVersionPolicyTest {
     }
 
     @Test
+    fun identityUsesFullPayloadDigestAndSource() {
+        val prefix = "01234567"
+        val builtin = RomIdentity(RomSource.Builtin, "android10@1.0.0", prefix + "0".repeat(56))
+        val imported = RomIdentity(RomSource.Imported, "android10@1.0.0", prefix + "1".repeat(56))
+        assertTrue(builtin.rowId != imported.rowId)
+        assertEquals(builtin.rowId, entry(
+            id = "android10",
+            version = "1.0.0",
+            source = RomSource.Builtin,
+            payload = builtin.payloadSha256,
+        ).rowId)
+    }
+
+    @Test
     fun nameWithVersionFormat() {
         assertEquals("Android 15 V1.0.0", RomTexts.nameWithVersion("Android 15", "1.0.0"))
         assertEquals("Android 15", RomTexts.nameWithVersion("Android 15", RomKeys.LEGACY_VERSION))

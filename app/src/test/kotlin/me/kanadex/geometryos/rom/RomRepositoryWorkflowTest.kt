@@ -132,5 +132,58 @@ class RomRepositoryWorkflowTest {
         assertTrue(RecordArchive.entries(context, repair).any { it.path == "operation.log" })
         val failed = records.single { it.kind == RecordKind.ROM_CHECK }
         assertTrue(RecordArchive.readText(context, failed, "operation.log").contains("stackTrace"))
+
+        val second = repository.importFromUri(Uri.fromFile(createRomFixture(work, "different same-version payload"))) {}
+        assertEquals(imported.row.key, second.row.key)
+        assertTrue(imported.row.payloadSha256 != second.row.payloadSha256)
+        assertTrue(VmRegistry.get(context).setRomId(
+            device.id, second.row.key, second.row.payloadSha256, second.row.source.name,
+        ))
+        repository.delete(second.row.rowId)
+
+        val selected = RomRef(second.row.key, second.row.source, second.row.payloadSha256)
+        val decision = RomVersionPolicy.decision(repository.versionEntries()[second.row.id].orEmpty(), selected)
+        assertTrue(decision is RomVersionDecision.CurrentMissing)
+        assertTrue(repository.resolve(second.row.key, second.row.payloadSha256) == null)
+        assertTrue(repository.resolve(imported.row.key, payloadSha) != null)
+        assertFalse(repository.hasArchive(second.row.key, second.row.payloadSha256))
+    }
+
+    private fun createRomFixture(work: File, payloadText: String): File {
+        val payload = File(work, "payload-" + payloadText.hashCode() + "/rootfs/system/build.prop")
+        payload.parentFile!!.mkdirs()
+        payload.writeText(payloadText, Charsets.UTF_8)
+        val payloadRoot = payload.parentFile!!.parentFile!!.parentFile!!
+        val sha = RomHash.payloadSha256(payloadRoot).first
+        val inputs = JSONObject()
+            .put("guestSdk", 35)
+            .put("data", JSONArray().put(JSONObject()
+                .put("name", "payload/rootfs/system/build.prop")
+                .put("bytes", payload.length())
+                .put("sha256", RomHash.fileSha256(payload))))
+            .put("files", JSONArray())
+            .toString()
+        val properties = listOf(
+            "schema: versebox-rom/2", "id: android15", "romVersion: 9.8.7",
+            "name: Android 15 Fixture", "androidVersion: 15", "apiLevel: 35",
+            "description: Repository fixture", "inputs: versebox_inputs.json", "payloadRoot: payload/",
+            "payloadBytes: " + payload.length(), "payloadSha256: " + sha, "libMode: rom",
+            "packedBy: app-unit-test", "packedAt: test",
+        ).joinToString("\n")
+        val zipFile = File(work, "fixture-" + payloadText.hashCode() + ".zip")
+        ZipOutputStream(zipFile.outputStream()).use { zip ->
+            val entries = linkedMapOf(
+                RomLayout.PROPERTIES to properties.toByteArray(Charsets.UTF_8),
+                RomLayout.INPUTS to inputs.toByteArray(Charsets.UTF_8),
+                "payload/" to ByteArray(0),
+                "payload/rootfs/system/build.prop" to payload.readBytes(),
+            )
+            entries.forEach { (name, bytes) ->
+                zip.putNextEntry(ZipEntry(name))
+                zip.write(bytes)
+                zip.closeEntry()
+            }
+        }
+        return zipFile
     }
 }

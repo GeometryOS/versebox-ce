@@ -14,6 +14,16 @@ enum class RomSource {
     Legacy,
 }
 
+/** ROM 行的规范身份。key 与版本用于分类，完整 payload 摘要和来源用于区分可独立管理的行。 */
+data class RomIdentity(
+    val source: RomSource,
+    val key: String,
+    val payloadSha256: String,
+) {
+    val rowId: String get() = source.name.lowercase() + ":" + key +
+        (if (payloadSha256.isEmpty()) "" else "@" + payloadSha256)
+}
+
 // ROM 的登记状态，UI 只认这五个
 enum class RomState { Pending, Extracting, Ready, Failed, Missing }
 
@@ -79,8 +89,7 @@ data class RomRow(
      * 列表身份，由来源、romKey 和内容指纹拼成。
      * 同版本的内置与本地、同来源导入两次都是不同的行，只用 romKey 会撞 key，动作会打错行。
      */
-    val rowId: String = source.name.lowercase() + ":" + key +
-        (if (payloadSha256.isEmpty()) "" else "@" + RomLayout.payloadTag(payloadSha256)),
+    val rowId: String = RomIdentity(source, key, payloadSha256).rowId,
     // 已解包目录里那一份的指纹，没有解包目录就是空
     val extractedSha256: String = "",
     /**
@@ -89,6 +98,8 @@ data class RomRow(
      */
     val hasArchive: Boolean = false,
 ) {
+    val identity: RomIdentity get() = RomIdentity(source, key, payloadSha256)
+
     // 能不能拿来新建或启动虚拟机
     val isReady: Boolean get() = state == RomState.Ready
 

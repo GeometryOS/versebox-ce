@@ -32,8 +32,8 @@ data class RomVersionEntry(
      * 列表身份。同版本两行（来源不同或内容不同）的列表 key 和动作定位都认它，
      * 只到 romKey 会撞成同一个 id，那时列表只剩一行，切换也就没有目标了
      */
-    val rowId: String get() = source.name.lowercase() + ":" + key +
-        (if (payloadSha256.isEmpty()) "" else "@" + RomLayout.payloadTag(payloadSha256))
+    val identity: RomIdentity get() = RomIdentity(source, key, payloadSha256)
+    val rowId: String get() = identity.rowId
 
     // 这一条的身份，切换判据和实例绑定都要带全
     val ref: RomRef get() = RomRef(key = key, source = source, payloadSha256 = payloadSha256)
