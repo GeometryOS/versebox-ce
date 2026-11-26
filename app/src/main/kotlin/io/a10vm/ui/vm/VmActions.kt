@@ -118,18 +118,9 @@ object VmActions {
     fun deviceSubtitle(device: VmDevice, romTitle: String?): String = romTitle ?: device.romId
 }
 
-/**
- * 「先开这台虚拟机自己的窗口，再发启动指令」。
- *
- * **窗口永远开**（用户要求，2026-11-12）：点启动就要看到启动页，哪怕这一次根本起不来。
- * 起不来的原因由**启动页自己**弹窗说明（ROM 没选 / 版本不在 / 解包体不全），
- * 而不是在主页那一层弹一个用户看不到的框，也不是把启动页拦在门外。
- *
- * 所以这里的顺序是固定的：openDesktop → AppState.start（后者只决定"发不发 START"）。
- */
 fun startAndOpen(context: android.content.Context, appState: AppState, device: VmDevice) {
-    openDesktop(context, device, appState.romOf(device))
-    appState.start(device.id)
+    appState.requestVmStart(device.id)
+    openWindow(context, appState, device)
 }
 
 /** 只开窗口（运行中再点一次的场景）。 */

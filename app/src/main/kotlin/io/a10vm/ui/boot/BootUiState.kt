@@ -2,6 +2,7 @@
 // Copyright (C) 2026 VerseBox contributors
 package io.a10vm.ui.boot
 
+import me.kanadex.geometryos.boot.BootEvent
 import me.kanadex.geometryos.rom.RomTone
 
 /**
@@ -26,27 +27,6 @@ sealed interface BootFault {
     /** C1：入口没传参 / 查不到实例。 */
     data object NoInstance : BootFault
 
-    /** C2：原包缺失（ROM 登记里查不到，或目录被删）。 */
-    data class RomMissing(val vmName: String, val romId: String) : BootFault
-
-    /**
-     * C3：解包内容损坏 / 校验失败。
-     *
-     * @param key ROM 主键（`<id>@<version>`）
-     * @param rowId 要修复的**那一行**（`<来源>:<romKey>@<sha8>`）。
-     *        同版本可能存在内置/本地两行、或同来源的两份内容：只给 key 会去修另一份，
-     *        用户看到"修完了但还是老样子"（P5/P3 的同一类错误）。
-     * @param problems 清单比对出的缺失条目（数据层给，最多 64 条）
-     * @param canRepair 原包还在不在——决定有没有「去修复」这个动作
-     */
-    data class RomDamaged(
-        val key: String,
-        val rowId: String,
-        val romTitle: String,
-        val problems: List<String>,
-        val canRepair: Boolean,
-    ) : BootFault
-
     /** C4：其它启动失败（有 ERROR 事件但无 C1–C3 特征）。 */
     data class Other(val reason: String) : BootFault
 }
@@ -57,13 +37,12 @@ sealed interface BootFault {
  * 三件事：这一次为什么起不来（或为什么建议换版本）、两个出口的文字。
  * 页面只画这几个字符串；判定在 [BootViewModel]，动作在 [BootAction]。
  */
-data class RomGate(
+class RomGate internal constructor(
+    internal val event: BootEvent,
     val title: String,
     val message: String,
-    /** 「去版本管理」——非破坏性跳转：管理页 → 版本管理页。 */
-    val openVersionText: String,
-    /** 「继续启动」——只有"有更新版本但仍可启动"时才有；null = 没有这个出口。 */
-    val continueText: String? = null,
+    val confirmText: String,
+    val dismissText: String? = null,
 )
 
 /**
@@ -154,15 +133,7 @@ sealed interface BootAction {
     /** 关掉 C 类对话框，停在第一屏继续观察。 */
     data object DismissFault : BootAction
 
-    // ---- ROM 闸门（启动页弹窗）的三个出口 ----
-    /** 非破坏性跳转：管理页 → 版本管理页（由宿主 Activity 处理，因为要发 Intent）。 */
-    data object OpenRomVersion : BootAction
-
-    /** 「继续启动」：跳过版本提示，直接发 START（宿主 Activity 处理）。 */
-    data object ContinueStart : BootAction
-
-    /** 闸门弹窗被关掉（只清 UI，不做任何动作）。 */
-    data object DismissRomGate : BootAction
+    data class RespondToGate(val gate: RomGate, val confirmed: Boolean) : BootAction
 
     /** 关掉 B 类弹窗（保留最后一帧，不重启、不停实例）。 */
     data object DismissAlert : BootAction

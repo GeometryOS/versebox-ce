@@ -38,19 +38,21 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import io.a10vm.nativedisplay.NativeSurfaceView
 import io.a10vm.runtime.RomCatalog
 import io.a10vm.runtime.VmConnection
 import io.a10vm.runtime.VmDevices
 import io.a10vm.runtime.VmService
 import io.a10vm.ui.boot.BootFault
-import io.a10vm.ui.boot.BootAction
 import io.a10vm.ui.boot.BootHost
 import io.a10vm.ui.boot.BootLauncher
+import me.kanadex.geometryos.boot.BootGateSequence
 import io.a10vm.ui.boot.BootRestartBus
-import io.a10vm.ui.boot.BootTexts
 import io.a10vm.ui.boot.BootViewModel
 import io.a10vm.ui.boot.BootUiState
+import io.a10vm.ui.boot.BootTexts
 import io.a10vm.ui.boot.rememberBootViewModel
 import io.a10vm.ui.icons.AppMiuixIcons
 import io.a10vm.ui.settings.AppPreferences
@@ -125,6 +127,18 @@ class FullscreenActivity : ComponentActivity() {
         )
     }
 
+    private val startGuest: () -> Unit = { vm.perform(VmService.START, null, deviceId) }
+
+    private val navigateAfterGate: (BootGateSequence.Result) -> Unit = { result ->
+        when (result) {
+            BootGateSequence.Result.OpenVersions -> BootLauncher.openRomVersion(this, deviceId)
+            BootGateSequence.Result.OpenRomList -> BootLauncher.openRomList(this)
+            is BootGateSequence.Result.Repair -> BootLauncher.openRomRepair(this, result.key, deviceId, result.rowId)
+            else -> error("Unexpected navigation result: $result")
+        }
+        moveTaskToBack(true)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         deviceId = intent.getStringExtra(VmService.EXTRA_INSTANCE).orEmpty()
@@ -141,7 +155,7 @@ class FullscreenActivity : ComponentActivity() {
             .resolve(romId, device?.romPayload.orEmpty())
             ?: RomCatalog(this).find(romId)
         deviceName = intent.getStringExtra("name") ?: device?.name ?: deviceName
-        if (device == null || intent.data != Uri.Builder().scheme("versebox").authority("vm").appendPath(deviceId).build()) {
+        if (intent.data != Uri.Builder().scheme("versebox").authority("vm").appendPath(deviceId).build()) {
             finishAndRemoveTask()
             return
         }
@@ -171,16 +185,16 @@ class FullscreenActivity : ComponentActivity() {
                     vmName = deviceName,
                     romLine = romLine,
                     runtime = runtimeFlow,
+                    startGuest = startGuest,
+                    navigate = navigateAfterGate,
                 )
                 bootViewModel = viewModel
                 val bootState by viewModel.state.collectAsStateWithLifecycle()
 
-                // ROM 修复完成后，ROM 列表会通过这条进程内信箱请求「在同一窗口重跑一次」，
-                // 不重建 Activity（09/04 §3 第 4 条）。
-                LaunchedEffect(deviceId) {
-                    BootRestartBus.vmId.collect { pending ->
-                        if (pending != null && BootRestartBus.consume(deviceId)) {
-                            vm.perform(VmService.START, null, deviceId)
+                LaunchedEffect(viewModel) {
+                    lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                        BootRestartBus.vmIds.collect {
+                            if (BootRestartBus.consume(deviceId)) viewModel.requestStart()
                         }
                     }
                 }
@@ -204,25 +218,7 @@ class FullscreenActivity : ComponentActivity() {
                     BootHost(
                         useMiuix = theme.useMiuix,
                         state = bootState,
-                        onAction = { action ->
-                            when (action) {
-                                // 非破坏性跳转：主页 → 管理页 → 版本管理页（主壳负责栈）。
-                                // **不 finishAndRemoveTask**：那会把这张窗口的任务卡片一起删掉。
-                                // 卡片只在"关机完成"时移除（本文件 bootState.exitRequested 那条）；
-                                // 这里只是去选个版本，虚拟机还开着，卡片必须留在最近任务里。
-                                BootAction.OpenRomVersion -> {
-                                    viewModel.dispatch(BootAction.DismissRomGate)
-                                    BootLauncher.openRomVersion(this@FullscreenActivity, deviceId)
-                                    moveTaskToBack(true)
-                                }
-                                // 「继续启动」：跳过版本提示，直接发 START（本窗口继续显示启动页）。
-                                BootAction.ContinueStart -> {
-                                    viewModel.dispatch(BootAction.DismissRomGate)
-                                    vm.perform(VmService.START, null, deviceId)
-                                }
-                                else -> viewModel.dispatch(action)
-                            }
-                        },
+                        onAction = viewModel::dispatch,
                     )
                     ManagementPillLayer(useMiuix = theme.useMiuix, onClick = { returnToManager() })
                 }
@@ -242,6 +238,7 @@ class FullscreenActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        bootViewModel?.cancelStart()
         if (deviceId.isNotEmpty()) vm.unbind()
         display?.connect(null)
         super.onStop()

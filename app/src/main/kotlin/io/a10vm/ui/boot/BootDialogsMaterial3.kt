@@ -9,6 +9,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import io.a10vm.ui.page.main.widget.setting.BlockingLoadingIndicator
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
@@ -25,24 +26,16 @@ import androidx.compose.ui.text.withLink
  */
 @Composable
 fun Material3BootDialogs(state: BootUiState, onAction: (BootAction) -> Unit) {
-    // ROM 闸门（与 Miuix 分支逐项同构）。
     state.romGate?.let { gate ->
         AlertDialog(
-            onDismissRequest = { onAction(BootAction.DismissRomGate) },
+            onDismissRequest = { onAction(BootAction.RespondToGate(gate, false)) },
             title = { Text(gate.title) },
             text = { Text(gate.message) },
             confirmButton = {
-                TextButton(onClick = { onAction(BootAction.OpenRomVersion) }) { Text(gate.openVersionText) }
+                TextButton(onClick = { onAction(BootAction.RespondToGate(gate, true)) }) { Text(gate.confirmText) }
             },
-            dismissButton = {
-                val label = gate.continueText ?: BootTexts.GATE_IGNORE
-                TextButton(
-                    onClick = {
-                        onAction(
-                            if (gate.continueText != null) BootAction.ContinueStart else BootAction.DismissRomGate,
-                        )
-                    },
-                ) { Text(label) }
+            dismissButton = gate.dismissText?.let { label ->
+                { TextButton(onClick = { onAction(BootAction.RespondToGate(gate, false)) }) { Text(label) } }
             },
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         )
@@ -71,6 +64,8 @@ fun Material3BootDialogs(state: BootUiState, onAction: (BootAction) -> Unit) {
             onDismiss = { onAction(BootAction.DismissAlert) },
         )
     }
+
+    BlockingLoadingIndicator(visible = state.busy, text = state.busyText, backdrop = null)
 
     state.message?.let { message ->
         AlertDialog(

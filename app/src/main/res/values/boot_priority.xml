@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="boot_event_order" translatable="false">
+        <item>CheckInstance</item>
+        <item>ShowNoInstance</item>
+        <item>CheckUpdate</item>
+        <item>ShowUpdate</item>
+        <item>CheckSelection</item>
+        <item>ShowMissingSelection</item>
+        <item>OpenVersions</item>
+        <item>CheckPayload</item>
+        <item>ShowSelectionChanged</item>
+        <item>ReopenVersions</item>
+        <item>ShowMissingPayload</item>
+        <item>OpenRomList</item>
+        <item>RepairPayload</item>
+        <item>StartGuest</item>
+        <item>ShowStartupFailure</item>
+        <item>ShowRuntimeAlert</item>
+        <item>ShowSnapshotProgress</item>
+        <item>ShowSnapshotFailure</item>
+    </string-array>
+</resources>

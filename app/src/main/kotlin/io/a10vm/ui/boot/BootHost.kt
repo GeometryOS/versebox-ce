@@ -3,6 +3,9 @@
 package io.a10vm.ui.boot
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
+import me.kanadex.geometryos.boot.BootGateSequence
 import androidx.compose.ui.Modifier
 
 /**
@@ -20,5 +23,7 @@ fun BootHost(useMiuix: Boolean, state: BootUiState, onAction: (BootAction) -> Un
     if (state.showsFirstScreen) {
         if (useMiuix) MiuixBootScreen(state, onAction) else Material3BootScreen(state, onAction)
     }
-    if (useMiuix) MiuixBootDialogs(state, onAction) else Material3BootDialogs(state, onAction)
+    val resources = LocalContext.current.resources
+    val visible = remember(resources) { BootGateSequence(resources) }.visible(state)
+    if (useMiuix) MiuixBootDialogs(visible, onAction) else Material3BootDialogs(visible, onAction)
 }

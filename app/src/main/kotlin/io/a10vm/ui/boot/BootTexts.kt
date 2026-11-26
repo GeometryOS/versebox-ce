@@ -69,38 +69,17 @@ object BootTexts {
 
     fun faultTitle(fault: BootFault): String = when (fault) {
         BootFault.NoInstance -> "打不开这台虚拟机"
-        is BootFault.RomMissing -> "ROM 原包不在了"
-        is BootFault.RomDamaged -> "ROM 文件不完整"
         is BootFault.Other -> "启动没有完成"
     }
 
     fun faultMessage(fault: BootFault): String = when (fault) {
         BootFault.NoInstance -> "启动入口没有带上虚拟机编号，或者这台虚拟机已经被删除。"
-        is BootFault.RomMissing ->
-            "找不到 " + fault.vmName + " 用的 ROM（" + fault.romId + "）。" +
-                "原包不在本机，重新解包也无从下手，需要重新导入这个 ROM。"
-        is BootFault.RomDamaged -> buildString {
-            val count = fault.problems.size
-            if (count > 0) {
-                append("系统文件缺失 ").append(count).append(" 处，例如 ").append(fault.problems.first())
-            } else {
-                append("解包目录与清单对不上")
-            }
-            append('\n')
-            if (fault.canRepair) {
-                append("可以自动修复，不需要重新安装虚拟机。")
-            } else {
-                append("原包已经不在本机，无法自动修复，需要重新导入这个 ROM。")
-            }
-        }
         is BootFault.Other -> fault.reason
     }
 
     /** 积极动作的按钮文字；C3 但原包不在时降级成「导入这个 ROM」。 */
     fun faultConfirm(fault: BootFault): String = when (fault) {
         BootFault.NoInstance -> ACTION_BACK_HOME
-        is BootFault.RomMissing -> ACTION_IMPORT_ROM
-        is BootFault.RomDamaged -> if (fault.canRepair) ACTION_REPAIR else ACTION_IMPORT_ROM
         is BootFault.Other -> ACTION_SHARE
     }
 
@@ -124,34 +103,18 @@ object BootTexts {
         confirmText = ACTION_SHARE,
     )
 
-    /** 启动链上发现解包不完整 → 自动发起修复时的一句话（不需要用户点「去修复」）。 */
-    fun autoRepair(romTitle: String): String = "ROM 解包不完整，正在为你自动修复：" + romTitle
-
-    // ---------------------------------------------- ROM 闸门（启动页弹窗）
-
     const val GATE_NEED_VERSION_TITLE = "需要先选一个 ROM 版本"
+    const val GATE_OPEN_VERSION = "去版本管理"
+    const val GATE_UPDATE_LATER = "稍后"
+    const val GATE_NOT_SELECTED = "这台虚拟机还没有选择 ROM，请先在版本管理中选择。"
+    const val GATE_PAYLOAD_TITLE = "ROM 文件不完整"
+    const val GATE_PAYLOAD_MISSING = "解包文件不完整，且找不到可用于修复的原包。请重新导入这份 ROM。"
 
-    const val GATE_OPEN_VERSION = "确定"
-
-    /** 关掉弹窗（不做任何动作，也不拦着用户回上一层）。 */
-    const val GATE_IGNORE = "忽略"
-
-    const val GATE_CONTINUE = "继续启动"
-
-    /** 当前版本不在了，但同系列里有更新的一版。 */
-    fun gateMissingWithNewer(current: String, newer: String): String =
-        "这台虚拟机原来用的 " + current + " 已经不在了。" +
-            newer + " 是更新的版本，去版本管理里选它就能继续使用。"
-
-    /** 当前版本不在了，同系列里也没有更新版（只能重选或导入）。 */
     fun gateMissing(current: String): String =
-        "这台虚拟机原来用的 " + current + " 已经不在了，请到版本管理里选一个可用版本；" +
-            "列表是空的就先导入对应的 ROM 包。"
+        "原先绑定的 ROM（" + current + "）已不可用，请在版本管理中重新选择。"
 
-    /** 有更新版本可用（可选）。 */
-    fun gateUpdate(current: String, latest: String): String =
-        "现在是 " + current + "，已经有更新的 " + latest + "。" +
-            "可以先去版本管理里切换，或者继续用当前这一份启动。"
+    fun gateUpdateCandidate(latest: String): String =
+        "同系列已有更新的 " + latest + "。可以前往版本管理，或稍后再处理。"
 
     /** 打包失败 / 分享面板起不来时的一句话（走 Snackbar，不弹第二个对话框）。 */
     const val SNAPSHOT_PACKING = "正在整理日志快照…"

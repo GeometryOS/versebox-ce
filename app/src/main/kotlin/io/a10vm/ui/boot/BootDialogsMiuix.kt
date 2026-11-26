@@ -21,32 +21,24 @@ import io.a10vm.ui.page.miuix.widgets.MiuixNoticeDialog
  */
 @Composable
 fun MiuixBootDialogs(state: BootUiState, onAction: (BootAction) -> Unit) {
-    // ROM 闸门：没选版本 / 版本不在 / 有更新版本。总在启动页上，用户一定看得到。
     state.romGate?.let { gate ->
-        val continueLabel = gate.continueText
-        if (continueLabel != null) {
-            // 有更新版本：主按钮「确定」（去版本管理），次按钮「继续启动」（本次就这么开）。
+        gate.dismissText?.let { dismiss ->
             MiuixConfirmDialog(
                 show = true,
                 title = gate.title,
                 message = gate.message,
-                confirmText = gate.openVersionText,
-                dismissText = continueLabel,
-                onConfirm = { onAction(BootAction.OpenRomVersion) },
-                onDismissRequest = { onAction(BootAction.ContinueStart) },
+                confirmText = gate.confirmText,
+                dismissText = dismiss,
+                onConfirm = { onAction(BootAction.RespondToGate(gate, true)) },
+                onDismissRequest = { onAction(BootAction.RespondToGate(gate, false)) },
             )
-        } else {
-            // 没有可用版本：主按钮「确定」，「忽略」关掉（用户可以先回去看别的，不强留）。
-            MiuixConfirmDialog(
-                show = true,
-                title = gate.title,
-                message = gate.message,
-                confirmText = gate.openVersionText,
-                dismissText = BootTexts.GATE_IGNORE,
-                onConfirm = { onAction(BootAction.OpenRomVersion) },
-                onDismissRequest = { onAction(BootAction.DismissRomGate) },
-            )
-        }
+        } ?: MiuixNoticeDialog(
+            show = true,
+            title = gate.title,
+            message = gate.message,
+            confirmText = gate.confirmText,
+            onDismissRequest = { onAction(BootAction.RespondToGate(gate, true)) },
+        )
     }
 
     state.fault?.let { fault ->

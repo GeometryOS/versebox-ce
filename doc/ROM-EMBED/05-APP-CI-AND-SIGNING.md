@@ -35,6 +35,10 @@ ROM staging 要访问三个运行时仓库的 Release 资产，只有拿到令�
 | `404：仓库或 Release 不存在` | 状态码 404 | 核对 `rom-embed.env` 的仓库名与 Release 资产名 |
 | 资产下载返回 403 或 400 | 重定向到对象存储后仍带 `Authorization` | 构建脚本按域决定是否携带该头，重定向由脚本自己跟随 |
 
+## 启动事件门禁
+
+`app-tests` 的 Android job 运行 `BootGateSequenceTest`。测试直接读取 [启动事件 XML](../../app/src/main/res/values/boot_priority.xml)，覆盖更新提示等待用户响应、响应后继续检查绑定、绑定缺失后导航、解包与修复结果、并发弹窗仲裁及不合法顺序。策略库的 `RomTextsTest` 验证 ROM 版本与完整内容标识的展示顺序。
+
 ## 本机复现
 
 单测（离线，与 app-tests job 同参数）。Robolectric 的 Android SDK 镜像由根构建脚本的 `:stageRobolectricSdk` 预先解析到 `build/robolectric-sdk`，测试只读该目录，运行期不访问 Maven Central；构建期的解析走 `settings.gradle.kts` 里只接管 `org.robolectric` 的镜像：

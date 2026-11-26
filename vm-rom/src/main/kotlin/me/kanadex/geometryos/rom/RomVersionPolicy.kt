@@ -143,6 +143,15 @@ object RomVersionPolicy {
     fun current(entries: List<RomVersionEntry>, selectedKey: String): RomVersionEntry? =
         match(entries, RomRef(selectedKey))
 
+    fun newerVersion(entries: List<RomVersionEntry>, ref: RomRef): RomVersionEntry? =
+        if (ref.isEmpty) null else series(entries, ref.id).firstOrNull {
+            !it.placeholder && (it.available || it.extractable) &&
+                RomKeys.compareVersions(it.version, ref.version) > 0
+        }
+
+    fun isSelectable(entry: RomVersionEntry?): Boolean =
+        entry != null && !entry.placeholder && (entry.available || entry.extractable)
+
     // 这台虚拟机现在该提示更新、强制换版本，还是不可用
     fun decision(entries: List<RomVersionEntry>, ref: RomRef): RomVersionDecision {
         if (ref.key.isEmpty()) return RomVersionDecision.Unavailable("")
@@ -160,7 +169,7 @@ object RomVersionPolicy {
             return if (best == null) RomVersionDecision.Unavailable(ref.key)
             else RomVersionDecision.CurrentMissing(ref.key, best)
         }
-        if (!selected.available && !selected.extractable) {
+        if (!isSelectable(selected)) {
             // 包在，但不可用也解不出来，同样只能去版本管理
             return if (best == null) RomVersionDecision.Unavailable(ref.key)
             else RomVersionDecision.CurrentMissing(ref.key, best)
@@ -169,13 +178,8 @@ object RomVersionPolicy {
          * 没解包但包还在，不算当前版本不在，交给启动链的修复步骤解出来。
          * 同版本号的另一份包不算更新，版本号没变，只在版本管理页里可选，这里只认严格更高。
          */
-        val newest = series.firstOrNull() ?: return RomVersionDecision.UpToDate
-        if (newest.key == selected.key) return RomVersionDecision.UpToDate
-        return if (RomKeys.compareVersions(newest.version, selected.version) > 0) {
-            RomVersionDecision.UpdateAvailable(selected, newest)
-        } else {
-            RomVersionDecision.UpToDate
-        }
+        return newerVersion(series, ref)?.let { RomVersionDecision.UpdateAvailable(selected, it) }
+            ?: RomVersionDecision.UpToDate
     }
 
     // 只给 romKey 的旧调用

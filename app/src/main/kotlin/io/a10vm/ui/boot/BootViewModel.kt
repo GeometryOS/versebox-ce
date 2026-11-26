@@ -8,9 +8,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
-import io.a10vm.runtime.RomCatalog
 import io.a10vm.runtime.VmDevices
 import io.a10vm.ui.BootLogText
+import me.kanadex.geometryos.boot.BootGateSequence
 import io.a10vm.ui.verse.VmRuntime
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -20,12 +20,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import me.kanadex.geometryos.rom.RomKeys
+import me.kanadex.geometryos.rom.RomRef
+import me.kanadex.geometryos.rom.RomSource
 import me.kanadex.geometryos.rom.RomRepository
-import me.kanadex.geometryos.rom.RomState
-import me.kanadex.geometryos.rom.RomTexts
-import me.kanadex.geometryos.rom.RomVersionDecision
-import me.kanadex.geometryos.rom.RomVersionPolicy
 
 /**
  * 第一屏的唯一逻辑实现（`docs/ui-rework/09/05` §4）。
@@ -39,10 +36,12 @@ import me.kanadex.geometryos.rom.RomVersionPolicy
  * 「出过首帧」与「运行过」都是**粘性**的：一旦为真就不再回退。否则客体框架进程重启时
  * 服务会把 `frameReady` 重新报成 false，第一屏又会盖上来——那正是「框架退出仍被启动页遮挡」的病根。
  */
-class BootViewModel(
+internal class BootViewModel(
     private val context: Context,
     private val vmId: String,
     private val vmName: String,
+    private val startGuest: () -> Unit,
+    private val navigate: (BootGateSequence.Result) -> Unit,
     private val romLine: String,
     runtime: StateFlow<VmRuntime>,
     private val scope: CoroutineScope,
@@ -61,9 +60,9 @@ class BootViewModel(
     private val seenLines = LinkedHashSet<String>()
     private val devices = VmDevices(context)
     private val roms = RomRepository.get(context)
-
-    /** 旧格式（APK 里 assets/roms 下的 yaml）的 ROM 目录；只解析一次。 */
-    private val legacyCatalog by lazy { RomCatalog(context) }
+    private val sequence = BootGateSequence(context.resources)
+    private var gateJob: kotlinx.coroutines.Job? = null
+    private var pendingGateResponse: kotlinx.coroutines.CompletableDeferred<Boolean>? = null
 
     /** 上一次看到的启动会话：变了就是「又启动了一次」，日志要清空重来。 */
     private var lastSession = ""
@@ -89,14 +88,10 @@ class BootViewModel(
     /** 上一次异常的一句话原因（空 = 没有）。 */
     private var lastFailure = ""
 
-    /** 自动修复链只发起一次：避免 classify 反复判定时来回跳转（2026-11-09 用户要求"自动"）。 */
-    private var autoRepairStarted = false
-
     /** 最近一次运行态快照：自动修复前要判断"服务是不是已经在修了"。 */
     private var lastRuntime: VmRuntime? = null
 
     private var resetToken = 0
-    private var faultChecked = false
     private val alertedSessions = HashSet<String>()
 
     /** 系统动画是否开启；关掉时日志必须一次性显示完整（`09/02` §1 的无障碍降级）。 */
@@ -106,62 +101,56 @@ class BootViewModel(
     init {
         scope.launch { animatorsEnabled = withContext(Dispatchers.IO) { animationsEnabled() } }
         scope.launch { runtime.collect { applyRuntime(it) } }
-        evaluateFault()
-        evaluateRomGate()
     }
 
-    /**
-     * 启动闸门：**在启动页上**判定并弹窗（2026-11-12）。
-     *
-     * 为什么在启动页：点启动之后用户看到的就是这一屏。判定放在主页那一层，
-     * 弹窗会被启动页盖住（上一个版本的真机事故）。
-     *
-     * 只读判据、不发 START、不改任何数据：真正的启动由 `AppState.start` 决定，
-     * 用户点「继续启动」时由宿主 Activity 直接发 START（绕过版本闸门）。
-     */
-    private fun evaluateRomGate() {
-        scope.launch {
-            val device = withContext(Dispatchers.IO) { runCatching { devices.find(vmId) }.getOrNull() }
-                ?: return@launch
-            val romId = device.romId
-            val entries = withContext(Dispatchers.IO) {
-                runCatching { roms.versionEntries() }.getOrDefault(emptyMap())
-            }
-            val series = entries[RomKeys.idOf(romId)].orEmpty()
-            val gate = when {
-                romId.isBlank() || series.isEmpty() -> RomGate(
-                    title = BootTexts.GATE_NEED_VERSION_TITLE,
-                    message = BootTexts.gateMissing(if (romId.isBlank()) "（未记录）" else romId),
-                    openVersionText = BootTexts.GATE_OPEN_VERSION,
+    fun requestStart() {
+        if (gateJob?.isActive == true || lastRuntime?.let { it.busy || it.running || it.stopping } == true) return
+        _state.update { it.copy(fault = null, alert = null) }
+        gateJob = scope.launch {
+            try {
+                val result = sequence.run(
+                    binding = { withContext(Dispatchers.IO) { readBinding() } },
+                    entries = { ref -> withContext(Dispatchers.IO) { roms.versionEntries()[ref.id].orEmpty() } },
+                    inspect = { ref ->
+                        withContext(Dispatchers.IO) {
+                            if (readBinding() != ref) null else roms.rowFor(ref)?.let {
+                                BootGateSequence.Inspection(roms.gate(it), it.key, it.rowId)
+                            }
+                        }
+                    },
+                    ask = ::askGate,
                 )
-                else -> when (val decision = RomVersionPolicy.decision(series, romId)) {
-                    is RomVersionDecision.CurrentMissing -> RomGate(
-                        title = BootTexts.GATE_NEED_VERSION_TITLE,
-                        message = decision.fallback
-                            ?.takeIf { RomKeys.compareVersions(it.version, RomKeys.versionOf(romId)) > 0 }
-                            ?.let {
-                                BootTexts.gateMissingWithNewer(
-                                    RomKeys.idOf(romId) + " " + RomKeys.versionOf(romId),
-                                    it.nameWithVersion,
-                                )
-                            } ?: BootTexts.gateMissing(romId),
-                        openVersionText = BootTexts.GATE_OPEN_VERSION,
-                    )
-                    is RomVersionDecision.Unavailable -> RomGate(
-                        title = BootTexts.GATE_NEED_VERSION_TITLE,
-                        message = BootTexts.gateMissing(romId),
-                        openVersionText = BootTexts.GATE_OPEN_VERSION,
-                    )
-                    is RomVersionDecision.UpdateAvailable -> RomGate(
-                        title = RomTexts.UPDATE_TITLE,
-                        message = BootTexts.gateUpdate(decision.current.nameWithVersion, decision.latest.nameWithVersion),
-                        openVersionText = BootTexts.GATE_OPEN_VERSION,
-                        continueText = BootTexts.GATE_CONTINUE,
-                    )
-                    RomVersionDecision.UpToDate -> null
+                when (result) {
+                    BootGateSequence.Result.NoInstance -> _state.update { it.copy(fault = BootFault.NoInstance) }
+                    BootGateSequence.Result.Start -> startGuest()
+                    else -> navigate(result)
                 }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                android.util.Log.e("VerseBoxBoot", "Startup gate failed for $vmId", failure)
+                _state.update { it.copy(fault = BootFault.Other(failure.message ?: BootTexts.FAILURE_UNKNOWN)) }
             }
-            _state.update { it.copy(romGate = gate) }
+        }
+    }
+
+    private fun readBinding(): RomRef? = devices.find(vmId)?.let { device ->
+        RomRef(device.romId, RomSource.entries.firstOrNull { it.name == device.romSource }, device.romPayload)
+    }
+
+    fun cancelStart() {
+        gateJob?.cancel()
+    }
+
+    private suspend fun askGate(gate: RomGate): Boolean {
+        val response = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        pendingGateResponse = response
+        _state.update { it.copy(romGate = gate) }
+        return try {
+            response.await()
+        } finally {
+            pendingGateResponse = null
+            _state.update { it.copy(romGate = null) }
         }
     }
 
@@ -195,8 +184,6 @@ class BootViewModel(
         }
         sawRunning = false
         sawAttempt = false
-        faultChecked = false
-        autoRepairStarted = false
         // 注意：**不清 lastSession**。清掉它会让下一次 bundle 被当成"新会话"，
         // 于是队列被清空 —— 真机上就表现为"强行进入关机中的虚拟机，日志是空的"。
         if (pendingReport && lastFailure.isNotEmpty()) {
@@ -218,7 +205,6 @@ class BootViewModel(
                 stageLine = BootTexts.STAGE_IDLE,
             )
         }
-        evaluateFault()
     }
 
     /** 上一次异常已被看过（弹窗点了忽略 / 已离开对话框）。 */
@@ -235,15 +221,10 @@ class BootViewModel(
             BootAction.DismissFault -> _state.update { it.copy(fault = null) }
             BootAction.DismissAlert -> _state.update { it.copy(alert = null) }
             BootAction.Restart -> restart()
-            BootAction.Recheck -> {
-                faultChecked = false
-                evaluateFault()
-            }
-
-            BootAction.DismissRomGate -> _state.update { it.copy(romGate = null) }
-            // 这两个由宿主 Activity 处理（要发 Intent / 直接发 START）；走到这里只清弹窗。
-            BootAction.OpenRomVersion -> _state.update { it.copy(romGate = null) }
-            BootAction.ContinueStart -> _state.update { it.copy(romGate = null) }
+            BootAction.Recheck -> requestStart()
+            is BootAction.RespondToGate -> if (_state.value.romGate === action.gate) {
+                pendingGateResponse?.complete(action.confirmed)
+            } else Unit
             BootAction.ConsumeMessage -> _state.update { it.copy(message = null) }
         }
     }
@@ -269,7 +250,6 @@ class BootViewModel(
             // 新一轮启动：上一轮的日志与结论都不再成立。
             BootLogFeed.clear(seenLines)
             resetToken += 1
-            faultChecked = false
             // 新会话：上一轮的「跑过 / 该退出」也一并清掉，否则刚重开一次就会被判成「已停止」。
             sawRunning = false
             _state.update {
@@ -282,7 +262,6 @@ class BootViewModel(
                     exitRequested = false,
                 )
             }
-            if (!hadFirstFrame) evaluateFault()
         }
 
         // 「停止中」：
@@ -340,67 +319,6 @@ class BootViewModel(
 
     // ------------------------------------------------------------------ 分诊
 
-    /**
-     * C 类分诊（`09/03` §2）。
-     *
-     * 只在「没有结论」时跑一次：先查最便宜的 `resolve()`（只读登记 + 目录存在性），
-     * 只有在它给不出结果时才扫全表——这样正常启动的路径上不会为了自检去量目录。
-     */
-    private fun evaluateFault() {
-        if (faultChecked) return
-        faultChecked = true
-        scope.launch {
-            val fault = withContext(Dispatchers.IO) { classify() }
-            // 运行态给出的 C4（[BootFault.Other]）不能被慢一步回来的 ROM 扫描结果抹掉。
-            _state.update { current ->
-                if (current.fault is BootFault.Other) current else current.copy(fault = fault)
-            }
-            // 解包坏了但原包还在 → **自动**走修复链（09/04 §2）：
-            // 不是等用户点「去修复」，而是启动时发现就自己跳过去修，修完回到这里重跑。
-            val damaged = fault as? BootFault.RomDamaged
-            if (damaged != null && damaged.canRepair && !autoRepairStarted) {
-                // 服务自己已经在修（BUSY + 那句"正在用原始 ROM 修复"）就让它修完，别两边同时跳。
-                val serviceRepairing = lastRuntime?.busy == true
-                if (!serviceRepairing) {
-                    autoRepairStarted = true
-                    _state.update { it.copy(message = BootTexts.autoRepair(damaged.romTitle)) }
-                    confirmFault()
-                }
-            }
-        }
-    }
-
-    private fun classify(): BootFault? {
-        val device = runCatching { devices.find(vmId) }.getOrNull() ?: return BootFault.NoInstance
-        val romId = device.romId
-        if (romId.isEmpty()) return null
-        // 1) 旧格式 ROM：内容跟着 APK 的 assets 走，没有可修的派生层。
-        if (runCatching { legacyCatalog.list().any { it.id == romId } }.getOrDefault(false)) return null
-        // 2) 登记行分级：查不到 = 原包不在了（C2）；状态坏 / 清单对不上 = 解包损坏（C3）。
-        //
-        // **判据只能是 payloadProblems（按清单逐条比对）**。这里原来先看 resolve()，而 resolve()
-        // 只判"解包目录三件必需物在不在"——删掉 payload 里一个 build.prop 它照样返回非空，
-        // 于是 C3 只在"整个目录都没了"时才出现（真机表现为"小概率才弹修复"）。
-        val rows = runCatching { roms.rows() }.getOrElse { emptyList() }
-        // **"查不到这一版"不在这里分类**：它属于启动闸门（RomGate）的事实。
-        // 两个分类器各判一次，就是两个弹窗叠在一起（真机：上面一个"原包不存在"）。
-        // 一个事实只允许一个分类器回答。
-        val row = rows.firstOrNull { it.key == romId }
-            ?: rows.firstOrNull { RomKeys.idOf(it.key) == romId }
-            ?: return null
-        val problems = runCatching { roms.payloadProblems(row) }.getOrDefault(emptyList())
-        val broken = row.state == RomState.Failed || row.state == RomState.Missing || problems.isNotEmpty()
-        if (!broken) return null
-        val canRepair = runCatching { roms.hasArchive(row.key) }.getOrDefault(false)
-        return BootFault.RomDamaged(
-            key = row.key,
-            rowId = row.rowId,
-            romTitle = RomTexts.title(row) + " " + row.version,
-            problems = problems,
-            canRepair = canRepair,
-        )
-    }
-
     private fun maybeAlert(runtime: VmRuntime) {
         // B 类：出过画面又停了。连接断开不算（窗口切后台时也会走到这里）。
         if (!hadFirstFrame || !runtime.failed || runtime.disconnected) return
@@ -437,19 +355,6 @@ class BootViewModel(
                 BootLauncher.openHome(context)
             }
 
-            is BootFault.RomMissing -> {
-                _state.update { it.copy(fault = null) }
-                BootLauncher.openRomList(context)
-            }
-
-            is BootFault.RomDamaged -> {
-                // 已经把人送去 ROM 管理页了：这条"正在自动修复"的提示在那边有进度弹窗承接，
-                // 留在这里会在回来时又弹一次（真机上表现为"回来后莫名其妙一个对话框"）。
-                _state.update { it.copy(fault = null, message = null) }
-                // 启动窗口留在栈里不 finish：修完由 ROM 列表发回重启信号（09/04 §2）。
-                BootLauncher.openRomRepair(context, fault.key, vmId, fault.rowId)
-            }
-
             is BootFault.Other -> {
                 _state.update { it.copy(fault = null) }
                 shareSnapshot()
@@ -484,8 +389,6 @@ class BootViewModel(
 
     /** 在**当前窗口**里重跑一次启动流程：不重建 Activity，日志清空成新的一段（`09/04` §3 第 4 条）。 */
     private fun restart() {
-        faultChecked = false
-        autoRepairStarted = false
         sawAttempt = false
         BootLogFeed.clear(seenLines)
         resetToken += 1
@@ -502,7 +405,7 @@ class BootViewModel(
                 stageLine = BootTexts.STAGE_IDLE,
             )
         }
-        BootRestartBus.request(vmId)
+        requestStart()
     }
 
     private fun animationsEnabled(): Boolean = runCatching {
@@ -519,15 +422,17 @@ class BootViewModel(
  * 重组不重建、参数变了才重建。
  */
 @Composable
-fun rememberBootViewModel(
+internal fun rememberBootViewModel(
     vmId: String,
     vmName: String,
     romLine: String,
     runtime: StateFlow<VmRuntime>,
+    startGuest: () -> Unit,
+    navigate: (BootGateSequence.Result) -> Unit,
 ): BootViewModel {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    return remember(context, vmId, vmName, romLine, runtime, scope) {
-        BootViewModel(context, vmId, vmName, romLine, runtime, scope)
+    return remember(context, vmId, vmName, romLine, runtime, scope, startGuest, navigate) {
+        BootViewModel(context, vmId, vmName, startGuest, navigate, romLine, runtime, scope)
     }
 }

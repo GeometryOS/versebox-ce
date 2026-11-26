@@ -17,7 +17,6 @@ import io.a10vm.runtime.limits.ChildProcessLimit
 import io.a10vm.runtime.limits.ChildProcessLimitMonitor
 import me.kanadex.geometryos.rom.RomKeys
 import me.kanadex.geometryos.rom.RomTexts
-import me.kanadex.geometryos.rom.RomVersionDecision
 import me.kanadex.geometryos.rom.RomVersionEntry
 import me.kanadex.geometryos.rom.RomVersionPolicy
 import io.a10vm.runtime.RenameResult
@@ -388,92 +387,9 @@ class AppState(private val context: Context) {
 
     // ------------------------------------------------------------- 动作
 
-    /**
-     * 启动一台虚拟机。
-     *
-     * 启动前先在 IO 上做一次**解包自检**：payload 缺文件、但原始包还在的话，
-     * 不把 START 发给服务（服务端自愈会在没人看的地方卡在「正在校验」，用户只看到
-     * 点了没反应），而是直接走 ROM 管理里的修复链：定位那一行 → 自动重解（有进度）
-     * → 修完回到这台虚拟机的启动页重新跑一次（`docs/ui-rework/09/04`）。
-     *
-     * 判断放在这里而不是页面里：它要读盘，而且两个 UI 分支、快捷入口都共用同一条启动路径。
-     */
-    fun start(id: String) {
+    fun requestVmStart(id: String) {
         cancelChildLimitProbe()
-        scope.launch {
-            val vm = device(id) ?: registry.find(id) ?: return@launch
-            // ① 连 rom_id 都没有（旧实例 / 数据被清）：先去版本管理页选一个，别把 START 发下去。
-            if (vm.romId.isBlank()) {
-                vmRomVersionRequest = id
-                return@launch
-            }
-            val decision = withContext(Dispatchers.IO) {
-                runCatching { romDecision(vm) }.getOrNull()
-            }
-            when (decision) {
-                // 需要**选一个版本**：这不是"提示"，是一次**非破坏性跳转**。
-                //
-                // 为什么不能弹窗：
-                //   1. 弹窗挂在 MainActivity 的导航层，用户可能正在启动页（另一个 Activity）上，
-                //      他根本看不到；看到也只是一行字，选不了版本；
-                //   2. "选版本"是页面能做的事（版本管理页），不是对话框能做的事。
-                //
-                // 所以：回虚拟机管理页 → 进 ROM 版本管理页，让用户在那里选。
-                // 数据、实例目录、正在运行的会话一律不动（非破坏性）。
-                is RomVersionDecision.CurrentMissing, is RomVersionDecision.Unavailable -> {
-                    vmRomVersionRequest = id
-                    return@launch
-                }
-
-                // 版本更新提示由启动页 Activity 的启动闸门唯一呈现，闸门结论出来前不发 START。
-                is RomVersionDecision.UpdateAvailable -> return@launch
-
-                else -> Unit
-            }
-            // ② 解包体不全但原包还在：也**不能先开窗口**，否则修复提示同样被启动页盖住。
-            //    定位必须带 rowId：同版本可能有内置/本地两行，只给 romKey 会修错那一份。
-            val broken = brokenRom(vm)
-            if (broken != null) {
-                focusRom(broken.key, repairVmId = id, rowId = broken.rowId)
-                return@launch
-            }
-            beginStart(vm)
-        }
-    }
-
-    /**
-     * 判据全部通过之后才做的事：**开窗口 → 发 START**。
-     *
-     * 顺序不能反。上一版是 `startAndOpen` 里先 `openDesktop` 再 `start`，
-     * 于是所有闸门（选版本 / 可选更新 / 需要解包）都发生在启动页**背后**：
-     * 用户看到的是一个 0% 的启动页，上层没有任何提示——他只会以为"点了没反应"。
-     * 启动页是"已经开始启动"的证据，不是"准备启动"的容器。
-     */
-    private suspend fun beginStart(vm: VmDevice) {
-        io.a10vm.ui.vm.openDesktop(context, vm, romOf(vm))
-        perform(VmService.START, vm.id)
-    }
-
-    /**
-     * 真正发起启动（跳过了版本闸门）。
-     *
-     * 与 [start] 分开是因为「继续启动」必须能绕过提示，否则点一次弹一次。
-     */
-    private suspend fun launchNow(id: String) = perform(VmService.START, id)
-
-    /**
-     * 这台虚拟机现在该不该提示更新 / 还开不开得起来（唯一判据在 [RomVersionPolicy]）。
-     *
-     * **只在 IO 线程调用**（会扫 ROM 登记）。
-     */
-    fun romDecision(device: VmDevice?): RomVersionDecision? {
-        val romId = device?.romId ?: return null
-        if (romId.isEmpty()) return null
-        val entries = romRepo.versionEntries()[RomKeys.idOf(romId)].orEmpty()
-        if (entries.isEmpty()) return null
-        // 判据吃的是**身份**（key + 来源 + 内容指纹），不是 romKey 字符串：
-        // 只看 key 会把"同版本的本地那一份"当成"我正在用的那一份"（2026-11-12 真机）。
-        return RomVersionPolicy.decision(entries, refOf(device))
+        io.a10vm.ui.boot.BootRestartBus.request(id)
     }
 
     // 这里曾经有 ensureRomReady()（创建前就地解包）与 romGate()（创建前拦一道），两个都删了：
@@ -560,26 +476,6 @@ class AppState(private val context: Context) {
         refreshRoms()
         return true
     }
-
-    /**
-     * 这台实例绑定的 ROM 现在是不是「解包坏了但还能修」。
-     *
-     * 找的是**这台实例正在用的那一行**：同版本号可能有内置/本地两行，只按 romKey 取第一条会修错
-     * 那一份（把另一份重解一遍，用户看到"修了但没变"）。
-     *
-     * @return 需要重解的那一行；null = 不用管（就绪 / 旧格式 / 原包也不在了）
-     */
-    private suspend fun brokenRom(vm: VmDevice): me.kanadex.geometryos.rom.RomRow? =
-        withContext(Dispatchers.IO) {
-            if (vm.romId.isEmpty()) return@withContext null
-            val row = runCatching { romRepo.rowFor(refOf(vm)) }.getOrNull() ?: return@withContext null
-            // 判据只有一份：[me.kanadex.geometryos.rom.RomGate]（创建链问的也是它）。
-            //   - NeedsExtract：解包体缺了/没解，但原包还在 → 走 ROM 管理里的修复链（有进度）；
-            //   - Missing：连原包都没有 → 交给服务拒绝启动并给出「请重新导入」；
-            //   - Ready / 旧格式：不用管。
-            // 这里以前自己拼了一段「problems 非空 + hasArchive」的判断，与创建链各写一份。
-            if (romRepo.gate(row) == me.kanadex.geometryos.rom.RomGate.NeedsExtract) row else null
-        }
 
     /**
      * 停止一台虚拟机，并在它真正停下来之后**把它的窗口任务卡片一并移除**。
