@@ -7,6 +7,7 @@
 | 目录 | 内容 |
 | --- | --- |
 | [ROM-EMBED](ROM-EMBED/README.md) | ROM 版本选择、发布清单校验、APK stage 与 app CI |
+| [Wall of Shame](WALL-OF-SHAME/01-CI-APK-MISSING-WINDOW-BRIDGE.md) | CI APK packaging incident and release rules |
 
 ## 仓库边界
 
