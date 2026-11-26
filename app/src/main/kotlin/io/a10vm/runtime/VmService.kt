@@ -95,37 +95,23 @@ class VmService : Service() {
          * **必须是可刷新的**：除了名字，它还带着 `displayMode`（分辨率/DPI）。
          * 原来这里是 `val`，于是"改完分辨率、重启虚拟机仍是旧分辨率"——会话是用
          * 创建 Instance 那一刻的快照建的，之后库里的新值永远读不到（2026-11-09 真机，A10 复现）。
-         * 刷新点有两处：250ms tick 的 [refreshNames]，以及每次 [sessionOf] 建会话前再从库里读一次。
+         * 观察器刷新这份运行态快照；启动命令另取注册表快照，不等待观察器。
          */
         @Volatile var device = device
         val id = device.id
         // 名字来自注册表，可以被"重命名"改掉：必须可变，由 refreshNames() 刷新。
         @Volatile var name = device.name
-        // 三段解析（docs/rom-package/07 §2.1）：先看已解包的 ROM 包（romKey 或同 id 最大版本），
-        // 再回落到 APK 里 assets/roms 的旧格式描述。旧实例因此逐字不变。
-        //
-        // **必须可刷新**：用户可以在 App 运行期间导入 / 删除 ROM。这里原来是一个只算一次的
-        // val，于是"导入 ROM 后必须重启 App 才能启动那台虚拟机"——真机踩过。
-        // 现在按 RomRepository.revision 缓存：ROM 一变（导入/删除/清缓存）就重解，
-        // 没变时零成本（读一个 Long + 一个内存字段）。
-        @Volatile private var romRevision: Long = -1L
-        @Volatile private var cachedRom: RomSpec? = null
+        private val romCache = VmRomResolutionCache()
+        val rom: RomSpec? get() = resolveRom(device)
+        val romSnapshot: RomSpec? get() = romCache.snapshot
 
-        val rom: RomSpec?
-            get() {
-                val repository = me.kanadex.geometryos.rom.RomRepository.get(this@VmService)
-                val revision = repository.revision.value
-                if (revision != romRevision) {
-                    // 把内容指纹一起传下去：同版本两份内容时，只按 romKey 解析会把另一份的
-                    // romRoot 交给这台实例（用户切了版本、开机却还是老系统）。
-                    cachedRom = repository.resolve(device.romId, device.romPayload)
-                        ?: roms.find(device.romId)
-                    romRevision = revision
-                }
-                return cachedRom
+        fun resolveRom(device: VmDevice): RomSpec? {
+            val repository = me.kanadex.geometryos.rom.RomRepository.get(this@VmService)
+            return romCache.resolve(device.romBinding(), repository.revision.value) { binding ->
+                repository.resolve(binding.key, binding.payload)
+                    ?: if (binding.payload.isEmpty()) roms.find(binding.key) else null
             }
-        /** 只读已缓存的结果、不解（给主线程用的快照：publish / 通知栏都不许碰数据库）。 */
-        val romSnapshot: RomSpec? get() = cachedRom
+        }
 
         /**
          * 这个实例的 ROM 现在"解不出来"，但**原始包还在**——那就还有救，不该直接拒绝启动。
@@ -137,7 +123,7 @@ class VmService : Service() {
          * `instances.computeIfAbsent` 在 tick 线程上同步做 IO，把 250ms 的 publish 卡住，
          * 表现就是启动页画面进度忽快忽慢（2026-11-15 维护者点名）。init 里绝不许调它。
          */
-        fun canRepairRom(): Boolean = runCatching {
+        fun canRepairRom(device: VmDevice): Boolean = runCatching {
             me.kanadex.geometryos.rom.RomRepository.get(this@VmService)
                 .hasArchive(device.romId, device.romPayload)
         }.getOrDefault(false)
@@ -152,7 +138,7 @@ class VmService : Service() {
          * 只对"精确绑定某个 romKey"的实例生效：旧格式实例从 APK assets 取内容，
          * 那条路径自带不可变来源，不需要也不该走这里。
          */
-        fun ensureRomUsable() {
+        fun ensureRomUsable(device: VmDevice) {
             val key = device.romId
             val repository = me.kanadex.geometryos.rom.RomRepository.get(this@VmService)
             // 按**身份**取这一行：同版本可能存在内置/本地两行（或两份不同内容），
@@ -301,24 +287,20 @@ class VmService : Service() {
         }
     }
 
-    private fun sessionOf(inst: Instance): NativeGraphicsSession {
-        val current = inst.rom
+    private fun sessionOf(inst: Instance, device: VmDevice, stopping: Boolean): NativeGraphicsSession {
+        val current = inst.resolveRom(device)
         val existing = inst.session
         if (existing != null) {
             // 复用条件：会话还活着，且绑的还是同一个 ROM。
             //  · 已关闭（上一次启动失败 / 停止后又被丢弃）→ 必须重建；
             //  · ROM 换了（用户导入 / 删除了包，或同 id 的新版本）→ 旧会话的 romRoot 已经不对，重建；
             //  · ROM 被删但会话还在跑 → 不动它（不能因为删包把正在跑的虚拟机杀掉）。
-            val stale = existing.isClosed || (current != null && existing.rom.id != current.id)
+            val stale = existing.isClosed || (!stopping && current != null &&
+                (existing.rom.id != current.id || existing.rom.romRoot != current.romRoot))
             if (!stale) return existing
             runCatching { existing.close() }
             inst.session = null
         }
-        // 建会话用的记录必须来自**注册表的最新一份**：显示设置可能刚被改过，
-        // 而 Instance 里的那份是 250ms tick 才刷新（甚至可能是几分钟前的）。
-        // 真机教训：不读最新记录时，改完分辨率再重启仍然按旧几何建会话（2026-11-09）。
-        val device = registry.find(inst.id) ?: inst.device
-        if (inst.device != device) inst.device = device
         val rom = requireNotNull(current) { "找不到 ROM ${device.romId}" }
         // 显示几何在**建会话时**解析一次：它决定渲染器帧缓冲与客体 DPI，
         // 两者必须在同一次运行里保持一致（docs/display-settings/04 §2）。
@@ -365,12 +347,27 @@ class VmService : Service() {
         val action = command.action
         if (destroyed || action !in ACTIONS) return START_NOT_STICKY
         val id = command.getStringExtra(EXTRA_INSTANCE) ?: return START_NOT_STICKY
+        if (action == START) {
+            // The registry write may have committed before the watcher has observed it.
+            diagnostics.execute {
+                val device = registry.find(id) ?: return@execute
+                val inst = instance(device)
+                main.post {
+                    if (!destroyed) handleCommand(command, START, inst, device)
+                }
+            }
+            return START_NOT_STICKY
+        }
         val inst = instances[id] ?: run {
             diagnostics.execute {
                 if (instance(id) != null && !destroyed) main.post { startService(command) }
             }
             return START_NOT_STICKY
         }
+        return handleCommand(command, action.orEmpty(), inst, inst.device)
+    }
+
+    private fun handleCommand(command: Intent, action: String, inst: Instance, device: VmDevice): Int {
         if (inst.deleted) return START_NOT_STICKY
         if (action == START && inst.session?.alive == true && !inst.busy.get()) {
             publish(inst)
@@ -387,18 +384,21 @@ class VmService : Service() {
         //
         // 这里是入口链（用户点启动时的一次性调用），可以碰文件系统；
         // tick 线程上的 Instance.init 绝不许做同样的判断（会把画面进度卡出抖动）。
-        if (action != DELETE && inst.rom == null && !inst.canRepairRom()) {
+        val selectedRom = if (action == DELETE) inst.romSnapshot else inst.resolveRom(device)
+        if (action != DELETE && selectedRom == null && !inst.canRepairRom(device) &&
+            !(action == STOP && inst.session != null)
+        ) {
             // 拒绝启动也必须留一条**记录**：否则用户点了一次启动、界面上什么痕迹都没有，
             // 记录中心里也查不到"为什么这台起不来"（真机反馈：删除 ROM 后启动失败的日志不见了）。
             //
             // 这里用 recordMeta：拒绝发生在创建会话之前，没有任何客体日志可归档；
             // 伪造一份"日志"比不写更坏（_audit/04 §2）。
-            val reason = "ROM 缺失（${inst.device.romId}）。请到 ROM 管理里导入这个 ROM，或删除这台虚拟机。"
+            val reason = "ROM 缺失（${device.romId}）。请到 ROM 管理里导入这个 ROM，或删除这台虚拟机。"
             RecordCollector.recordMeta(
                 context = this,
                 vmId = inst.device.id,
                 vmName = inst.name,
-                romId = inst.device.romId,
+                romId = device.romId,
                 romName = null,
                 apiLevel = 0,
                 kind = recordKindOf(action.orEmpty()),
@@ -427,8 +427,8 @@ class VmService : Service() {
             // rom 为 null 还能走到这里，说明上面「包真不在了」的拒绝分支没触发：
             // 原始包还在，只是还没解包（内置包首次使用 / 解包体被系统清掉）。
             // 这句是给用户看的准确文案；真正的解包在 worker 里的 ensureRomUsable()。
-            START -> if (inst.rom != null)
-                "正在启动 ${inst.name}（${inst.rom?.name}）框架、私有 Binder 与原生显示。"
+            START -> if (selectedRom != null)
+                "正在启动 ${inst.name}（${selectedRom.name}）框架、私有 Binder 与原生显示。"
             else
                 "这个 ROM 还没准备好（尚未解包或解包体不完整）。正在解包后继续开机…"
             CHECK_DESKTOP -> "正在检查 ${inst.name} 的桌面启动。"
@@ -441,7 +441,7 @@ class VmService : Service() {
         val recordKind = recordKindOf(action.orEmpty())
         inst.recordKind = recordKind
         if (action == START) beginAuditSession(inst)
-        inst.recordId = RecordCollector.begin(this, inst.device, inst.rom, recordKind)
+        inst.recordId = RecordCollector.begin(this, device, selectedRom, recordKind)
         inst.worker.execute {
             val background = action in setOf(INSTALL_APK, IMPORT_APPS, IMPORT_FILES)
             Process.setThreadPriority(if (background) Process.THREAD_PRIORITY_BACKGROUND else Process.THREAD_PRIORITY_DEFAULT)
@@ -453,13 +453,14 @@ class VmService : Service() {
                     delete(inst)
                     return@execute
                 }
+                val operationDevice = if (action == START) device else registry.find(inst.id) ?: device
                 if (action != STOP) {
-                    RecordCollector.appendOperation(this, inst.recordId, inst.device, "integrity", "check_started", "检查所选ROM解包体")
-                    inst.ensureRomUsable()
+                    RecordCollector.appendOperation(this, inst.recordId, operationDevice, "integrity", "check_started", "检查所选ROM解包体")
+                    inst.ensureRomUsable(operationDevice)
                     kotlinx.coroutines.runBlocking { RecordCollector.awaitOperationArchives("rom") }
-                    RecordCollector.appendOperation(this, inst.recordId, inst.device, "integrity", "check_completed", "ROM解包体完整，可以继续准备实例")
+                    RecordCollector.appendOperation(this, inst.recordId, operationDevice, "integrity", "check_completed", "ROM解包体完整，可以继续准备实例")
                 }
-                val session = sessionOf(inst)
+                val session = sessionOf(inst, operationDevice, stopping = action == STOP)
                 when (action) {
                     INSPECT -> update(inst, if (session.alive) "RUNNING" else "IDLE", session.inspect())
                     CHECK_DESKTOP -> update(inst, "IDLE", session.checkDesktop())
@@ -471,7 +472,7 @@ class VmService : Service() {
                         inst.window?.let { windows[inst.id] = it } ?: windows.remove(inst.id)
                         inst.runningSince = System.currentTimeMillis()
                         update(inst, "RUNNING",
-                            "${inst.name} 已启动 · ${inst.rom?.name} 系统服务")
+                            "${inst.name} 已启动 · ${session.rom.name} 系统服务")
                     }
                     STOP -> {
                         inst.runningSince = 0L

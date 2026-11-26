@@ -27,6 +27,8 @@ import io.a10vm.records.RecordKind
 import io.a10vm.records.RecordStatus
 import io.a10vm.records.RecordStore
 import io.a10vm.runtime.VmRegistry
+import io.a10vm.runtime.VmRomResolutionCache
+import io.a10vm.runtime.romBinding
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -147,6 +149,17 @@ class RomRepositoryWorkflowTest {
         assertTrue(repository.resolve(second.row.key, second.row.payloadSha256) == null)
         assertTrue(repository.resolve(imported.row.key, payloadSha) != null)
         assertFalse(repository.hasArchive(second.row.key, second.row.payloadSha256))
+
+        val registry = VmRegistry.get(context)
+        val cache = VmRomResolutionCache()
+        val revision = repository.revision.value
+        fun resolve() = cache.resolve(checkNotNull(registry.find(device.id)).romBinding(), repository.revision.value) {
+            repository.resolve(it.key, it.payload)
+        }
+        assertEquals(null, resolve())
+        assertTrue(registry.setRomId(device.id, imported.row.key, payloadSha, imported.row.source.name))
+        assertEquals(revision, repository.revision.value)
+        assertEquals(romDir.canonicalFile, resolve()?.romRoot?.canonicalFile)
     }
 
     private fun createRomFixture(work: File, payloadText: String): File {

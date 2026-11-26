@@ -40,6 +40,23 @@ data class VmDevice(
     val romSource: String = "",
 )
 
+internal data class VmRomBinding(val key: String, val payload: String, val source: String)
+
+internal fun VmDevice.romBinding() = VmRomBinding(romId, romPayload, romSource)
+
+// Publish the key and its result together because the watcher and launch worker share this cache.
+internal class VmRomResolutionCache {
+    private data class Entry(val binding: VmRomBinding, val revision: Long, val rom: RomSpec?)
+    @Volatile private var entry: Entry? = null
+
+    val snapshot: RomSpec? get() = entry?.rom
+
+    fun resolve(binding: VmRomBinding, revision: Long, load: (VmRomBinding) -> RomSpec?): RomSpec? {
+        entry?.let { if (it.binding == binding && it.revision == revision) return it.rom }
+        return load(binding).also { entry = Entry(binding, revision, it) }
+    }
+}
+
 /**
  * 虚拟机注册表门面。
  *
