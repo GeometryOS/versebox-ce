@@ -79,6 +79,20 @@ class RomTextsTest {
     }
 
     @Test
+    fun contentIdentityFollowsVersion() {
+        val rom = row()
+        val facts = RomTexts.detailSections(rom).first().facts
+        val index = facts.indexOfFirst { it.label == RomTexts.DETAIL_LABEL_VERSION }
+        assertEquals(RomDetailFact(RomTexts.DETAIL_LABEL_IDENTITY, rom.identity.rowId), facts[index + 1])
+        val changed = rom.copy(payloadSha256 = "b".repeat(64))
+        assertTrue(RomTexts.detailSections(changed).first().facts.any { it.value == changed.identity.rowId })
+        assertFalse(rom.identity.rowId == changed.identity.rowId)
+        assertFalse(RomTexts.detailSections(rom.copy(placeholder = true)).first().facts.any {
+            it.label == RomTexts.DETAIL_LABEL_IDENTITY
+        })
+    }
+
+    @Test
     fun legacyDetailsDoNotExposeTheInternalVersionOrAnUnpackedDirectory() {
         val facts = RomTexts.detailSections(row(RomSource.Legacy).copy(version = RomKeys.LEGACY_VERSION)).flatMap { it.facts }.associate { it.label to it.value }
         assertFalse(facts.containsKey(RomTexts.DETAIL_LABEL_VERSION))

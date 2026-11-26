@@ -90,6 +90,9 @@ object RomTexts {
             add(RomDetailFact(DETAIL_LABEL_NAME, title(row)))
             row.description.takeIf { it.isNotBlank() }?.let { add(RomDetailFact(DETAIL_LABEL_DESCRIPTION, it)) }
             row.version.takeIf { it.isNotBlank() && it != RomKeys.LEGACY_VERSION }?.let { add(RomDetailFact(DETAIL_LABEL_VERSION, it)) }
+            if (row.source != RomSource.Legacy && !row.placeholder && row.payloadSha256.isNotBlank()) {
+                add(RomDetailFact(DETAIL_LABEL_IDENTITY, row.identity.rowId))
+            }
             row.androidVersion.takeIf { it.isNotBlank() }?.let { add(RomDetailFact(DETAIL_LABEL_ANDROID, it)) }
             if (row.apiLevel > 0) add(RomDetailFact(DETAIL_LABEL_API, row.apiLevel.toString()))
             add(RomDetailFact(DETAIL_LABEL_SOURCE, sourceLabel(row.source)))
@@ -252,6 +255,7 @@ object RomTexts {
     const val DETAIL_LABEL_NAME = "ROM 名称"
     const val DETAIL_LABEL_DESCRIPTION = "介绍"
     const val DETAIL_LABEL_VERSION = "ROM 版本"
+    const val DETAIL_LABEL_IDENTITY = "ROM 标识符"
     const val DETAIL_LABEL_ANDROID = "Android 版本"
     const val DETAIL_LABEL_API = "API 级别"
     const val DETAIL_LABEL_SOURCE = "来源"
