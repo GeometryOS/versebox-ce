@@ -1,0 +1,16 @@
+name: Build host window renderer
+description: Build the pinned renderer and its manifest from source
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        repository: GeometryOS/VerseBox-guest-runtime-a15
+        ref: c57399d07b0619c064d86640f663b4aa08ee475c
+        path: build/ci-renderer
+        persist-credentials: false
+    - shell: bash
+      working-directory: build/ci-renderer
+      run: |
+        set -euo pipefail
+        sh scripts/build-desktop-window.sh

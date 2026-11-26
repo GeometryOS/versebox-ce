@@ -31,6 +31,7 @@ jobs:
           set -euo pipefail
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "tag 不是 vX.Y.Z：$RELEASE_TAG" >&2; exit 1; }
       - uses: ./.github/actions/setup-android
+      - uses: ./.github/actions/build-host-renderer
       - name: 还原签名密钥
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -57,7 +58,7 @@ jobs:
           ./gradlew --no-daemon --console=plain \
             :app:assembleRelease \
             -PverseboxRomProfile=full -PrequireReleaseSigning=true \
-            -PverseboxRomStrict=true -PciSkipNativeVerify=true
+            -PverseboxRomStrict=true -PnativeDisplayPrepared=build/ci-renderer/artifacts/native-display
           mkdir -p release-assets
           cp app/build/outputs/apk/release/app-release.apk release-assets/VerseBox-full.apk
       - name: 构建最小占位 APK
@@ -73,11 +74,13 @@ jobs:
           ./gradlew --no-daemon --console=plain \
             :app:assembleRelease -x :app:stageRomAssets \
             -PverseboxRomProfile=minimal -PrequireReleaseSigning=true \
-            -PverseboxRomStrict=true -PciSkipNativeVerify=true
+            -PverseboxRomStrict=true -PnativeDisplayPrepared=build/ci-renderer/artifacts/native-display
           cp app/build/outputs/apk/release/app-release.apk release-assets/VerseBox-minimal.apk
       - name: 验签并生成校验和
         run: |
           set -euo pipefail
+          python3 tools/verify-app-apk.py release-assets/VerseBox-full.apk
+          python3 tools/verify-app-apk.py release-assets/VerseBox-minimal.apk
           APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
           test -x "$APKSIGNER"
           "$APKSIGNER" verify --verbose release-assets/VerseBox-full.apk

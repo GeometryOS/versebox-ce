@@ -59,12 +59,14 @@ jobs:
         with:
           name: build-rom-staging
           path: app/build
+      - uses: ./.github/actions/build-host-renderer
       - name: 构建 Debug APK
         run: |
           set -euo pipefail
           ./gradlew --no-daemon --console=plain \
             :app:assembleDebug -x :app:stageRomAssets \
-            -PverseboxRomStrict=true -PciSkipNativeVerify=true
+            -PverseboxRomStrict=true -PnativeDisplayPrepared=build/ci-renderer/artifacts/native-display
+          python3 tools/verify-app-apk.py app/build/outputs/apk/debug/*.apk
       - name: 上传 Debug APK
         uses: actions/upload-artifact@v4
         with:
@@ -86,13 +88,8 @@ jobs:
       - name: 审计 APK 内容
         run: |
           set -euo pipefail
-          apk=$(find apk -name '*.apk' | head -n1)
-          test -n "$apk"
-          echo "APK：$apk"
-          echo "大小：$(stat -c%s "$apk") 字节"
-          sha256sum "$apk"
-          unzip -l "$apk" | grep -q 'assets/kanadex-rom/index.json' || { echo 'APK 缺少 assets/kanadex-rom/index.json' >&2; exit 1; }
-          libs=$(unzip -l "$apk" | grep -c 'lib/arm64-v8a/.*\.so' || true)
-          echo "APK 内 .so 数量：$libs"
-          test "$libs" -gt 0 || { echo 'APK 的 lib/arm64-v8a 为空，装机必失败' >&2; exit 1; }
-          unzip -l "$apk" | grep -q 'lib/arm64-v8a/libversebox_kanadex_logo.so' || { echo 'APK 缺少Rust品牌Logo动态库' >&2; exit 1; }
+          shopt -s nullglob
+          apks=(apk/*.apk)
+          test "${#apks[@]}" -eq 1
+          sha256sum "${apks[0]}"
+          python3 tools/verify-app-apk.py "${apks[0]}"

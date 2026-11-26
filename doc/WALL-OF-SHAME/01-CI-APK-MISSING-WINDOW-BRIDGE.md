@@ -24,3 +24,7 @@ The Debug and Release workflows share a [renderer build action](../../.github/ac
 The [APK verifier](../../tools/verify-app-apk.py) runs before Debug upload, after artifact download, and on both Release profiles before publication. It checks the required members, the ARM64 ELF headers, the manifest sizes and hashes, the renderer alias, and the codec against the packaged A15 GPU host when that peer is present.
 
 **Every installable CI APK must pass the native dependency check on the final ZIP.** Compilation success and a nonempty native library directory do not establish that the startup JNI library is present. Retain the renderer source revision and check its protocol compatibility whenever the paired ROM inputs change.
+
+## Verification
+
+A local rehearsal built the renderer from the pinned sources in an isolated directory and assembled a Debug APK with that explicit input and renderer verification enabled. The final APK passed the verifier, and a fixture with the old artifact layout was rejected. GitHub Actions and on-device startup remain pending. ADB rejected the local APK as an update because its signing certificate differs from the installed CI APK (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`). The installed app and its data were retained.
