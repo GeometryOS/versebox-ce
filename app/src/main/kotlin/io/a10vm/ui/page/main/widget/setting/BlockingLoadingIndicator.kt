@@ -12,10 +12,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ContainedLoadingIndicator
+import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -28,6 +32,26 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import io.a10vm.ui.theme.verseBoxMaterial3BlurEffect
 import top.yukonga.miuix.kmp.blur.LayerBackdrop
+
+// 页面首帧的加载态：占满内容区，居中一个指示器和一句真实状态。
+// 不遮罩、不拦返回，数据到了由页面整块换成列表或详情（docs/ui-rework/15）。
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun PageLoadingIndicator(text: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.fillMaxSize().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        LoadingIndicator()
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable

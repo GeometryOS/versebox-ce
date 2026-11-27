@@ -9,6 +9,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.a10vm.ui.icons.AppIcons
 import io.a10vm.ui.navigation.LocalNavigator
@@ -16,6 +17,7 @@ import io.a10vm.ui.navigation.Route
 import io.a10vm.ui.page.miuix.widgets.MiuixBlockingLoadingDialog
 import io.a10vm.ui.page.miuix.widgets.MiuixConfirmDialog
 import io.a10vm.ui.page.miuix.widgets.MiuixNoticeDialog
+import io.a10vm.ui.page.miuix.widgets.MiuixPageLoading
 import io.a10vm.ui.page.miuix.widgets.MiuixSettingsScaffold
 import io.a10vm.ui.page.miuix.widgets.miuixSection
 import me.kanadex.geometryos.rom.RomDetailAction
@@ -121,8 +123,8 @@ fun MiuixRomDetailPage(rowId: String, mode: RomListMode, useBlur: Boolean, backu
         },
     ) {
         when {
-            state.isLoading && state.row == null -> miuixSection(RomTexts.DETAIL_PAGE_TITLE) {
-                BasicComponent(title = RomTexts.DETAIL_LOADING)
+            state.isLoading && state.row == null -> item(key = "loading") {
+                MiuixPageLoading(RomTexts.DETAIL_LOADING, Modifier.fillParentMaxSize())
             }
             state.row == null -> miuixSection(RomTexts.DETAIL_PAGE_TITLE) {
                 BasicComponent(title = RomTexts.DETAIL_MISSING)

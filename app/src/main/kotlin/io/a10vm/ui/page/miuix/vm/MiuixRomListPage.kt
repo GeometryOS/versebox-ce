@@ -32,6 +32,7 @@ import io.a10vm.ui.navigation.LocalNavigator
 import io.a10vm.ui.navigation.Route
 import io.a10vm.ui.page.miuix.widgets.MiuixBadge
 import io.a10vm.ui.page.miuix.widgets.MiuixBlockingLoadingDialog
+import io.a10vm.ui.page.miuix.widgets.MiuixPageLoading
 import io.a10vm.ui.page.miuix.widgets.MiuixConfirmDialog
 import io.a10vm.ui.page.miuix.widgets.MiuixNoticeDialog
 import io.a10vm.ui.page.miuix.widgets.MiuixSettingsScaffold
@@ -95,7 +96,7 @@ fun MiuixRomListPage(useBlur: Boolean, mode: RomListMode = RomListMode.Manage, r
     // index 按**本分支的 item 结构**算（加载项 / 空态 / 组标题 / 每行各一个 item），不是猜的。
     LaunchedEffect(state.highlightKey, state.blinkToken) {
         val key = state.highlightKey ?: return@LaunchedEffect
-        val index = romItemIndex(state.groups, key, state.isLoading, state.isEmpty)
+        val index = romItemIndex(state.groups, key)
         if (index >= 0) listState.animateScrollToItem(index)
     }
 
@@ -125,41 +126,39 @@ fun MiuixRomListPage(useBlur: Boolean, mode: RomListMode = RomListMode.Manage, r
         },
         snackbarHost = { SnackbarHost(state = snackbarHostState) },
     ) {
-        // 正在读：必须有自己的表示，否则会先闪一次「还没有 ROM」再突然变成列表
-        // （docs/ui-rework/05 §4）。
+        // 首帧加载态占满内容区；数据到了整块换成列表，行沿用 miuix 卡片（docs/ui-rework/15）。
         if (state.isLoading) {
-            miuixSection {
-                BasicComponent(title = "正在读取 ROM…", summary = null)
+            item(key = "loading") {
+                MiuixPageLoading("正在读取 ROM…", Modifier.fillParentMaxSize())
             }
-        }
-
-        if (state.isEmpty) {
+        } else if (state.isEmpty) {
             miuixSection {
                 BasicComponent(
                     title = "还没有 ROM",
                     summary = "点右上角导入一个 ROM 包；安装包里内置的 ROM 会出现在这里。",
                 )
             }
-        }
-
-        state.groups.forEach { group ->
-            item(key = "title-" + group.title) {
-                SmallTitle(text = group.title)
-            }
-            items(group.items, key = { it.rowId }) { rom ->
-                MiuixRomCard(
-                    rom = rom,
-                    pickMode = state.isPick,
-                    onOpen = { navigator.push(Route.RomDetail(rom.rowId, state.isPick)) },
-                    highlight = state.highlightKey == rom.key,
-                    onHighlightFinished = { viewModel.dispatch(RomListAction.ConsumeFocus) },
-                    onDelete = { viewModel.dispatch(RomListAction.RequestDelete(rom.rowId)) },
-                    onCheck = { viewModel.dispatch(RomListAction.CheckRom(rom.rowId)) },
-                    onRepair = { viewModel.dispatch(RomListAction.RequestRepair(rom.rowId)) },
-                    onClearCache = { viewModel.dispatch(RomListAction.RequestClearCache(rom.rowId)) },
-                    onCreate = { viewModel.dispatch(RomListAction.Create(rom.rowId)) },
-                    onPick = { viewModel.dispatch(RomListAction.Pick(rom.rowId)) },
-                )
+        } else {
+            state.groups.forEach { group ->
+                item(key = "title-" + group.title) {
+                    SmallTitle(text = group.title)
+                }
+                items(group.items, key = { it.rowId }) { rom ->
+                    MiuixRomCard(
+                        modifier = Modifier.animateItem(),
+                        rom = rom,
+                        pickMode = state.isPick,
+                        onOpen = { navigator.push(Route.RomDetail(rom.rowId, state.isPick)) },
+                        highlight = state.highlightKey == rom.key,
+                        onHighlightFinished = { viewModel.dispatch(RomListAction.ConsumeFocus) },
+                        onDelete = { viewModel.dispatch(RomListAction.RequestDelete(rom.rowId)) },
+                        onCheck = { viewModel.dispatch(RomListAction.CheckRom(rom.rowId)) },
+                        onRepair = { viewModel.dispatch(RomListAction.RequestRepair(rom.rowId)) },
+                        onClearCache = { viewModel.dispatch(RomListAction.RequestClearCache(rom.rowId)) },
+                        onCreate = { viewModel.dispatch(RomListAction.Create(rom.rowId)) },
+                        onPick = { viewModel.dispatch(RomListAction.Pick(rom.rowId)) },
+                    )
+                }
             }
         }
     }
@@ -230,6 +229,7 @@ internal fun MiuixRomOperationDialogs(
  */
 @Composable
 internal fun MiuixRomCard(
+    modifier: Modifier = Modifier,
     rom: RomItem,
     pickMode: Boolean,
     onOpen: () -> Unit,
@@ -254,7 +254,7 @@ internal fun MiuixRomCard(
         onHighlightFinished()
     }
     Card(
-        modifier = Modifier
+        modifier = modifier
             .miuixCardInset()
             .graphicsLayer { alpha = pulse.value },
         onClick = onOpen,
@@ -381,15 +381,12 @@ internal fun MiuixRomCard(
 }
 
 /**
- * 一行 ROM 在 Miuix 版式里的位置：加载项 / 空态各占一个 item，每个非空组贡献
- * 「1 个组标题 item + N 个行 item」。
+ * 一行 ROM 在 Miuix 版式里的位置：每个组贡献「1 个组标题 item + N 个行 item」。
  *
  * @return -1 = 这一行不在当前列表里（例如已被删除）
  */
-private fun romItemIndex(groups: List<RomGroup>, key: String, isLoading: Boolean, isEmpty: Boolean): Int {
+private fun romItemIndex(groups: List<RomGroup>, key: String): Int {
     var index = 0
-    if (isLoading) index++
-    if (isEmpty) index++
     for (group in groups) {
         index++ // 组标题（SmallTitle）
         val offset = group.items.indexOfFirst { it.key == key }

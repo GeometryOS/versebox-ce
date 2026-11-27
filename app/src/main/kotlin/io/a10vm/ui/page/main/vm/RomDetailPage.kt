@@ -39,6 +39,7 @@ import io.a10vm.ui.navigation.Route
 import io.a10vm.ui.page.main.widget.menu.GroupedDropdownMenuPopup
 import io.a10vm.ui.page.main.widget.setting.BlockingLoadingIndicator
 import io.a10vm.ui.page.main.widget.setting.BaseWidget
+import io.a10vm.ui.page.main.widget.setting.PageLoadingIndicator
 import io.a10vm.ui.theme.getMaterial3AppBarColor
 import io.a10vm.ui.theme.rememberMaterial3BlurBackdrop
 import io.a10vm.ui.theme.verseBoxMaterial3BlurEffect
@@ -164,10 +165,8 @@ fun RomDetailPage(rowId: String, mode: RomListMode, useBlur: Boolean, backupId: 
             ),
         ) {
             when {
-                state.isLoading && state.row == null -> item {
-                    SegmentedColumn(title = RomTexts.DETAIL_PAGE_TITLE) {
-                        item { BaseWidget(title = RomTexts.DETAIL_LOADING) }
-                    }
+                state.isLoading && state.row == null -> item(key = "loading") {
+                    PageLoadingIndicator(RomTexts.DETAIL_LOADING, Modifier.fillParentMaxSize())
                 }
                 state.row == null -> item {
                     SegmentedColumn(title = RomTexts.DETAIL_PAGE_TITLE) {

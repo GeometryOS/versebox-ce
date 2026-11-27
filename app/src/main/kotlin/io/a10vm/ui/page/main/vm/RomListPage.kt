@@ -52,6 +52,7 @@ import io.a10vm.ui.page.main.widget.chip.material3ToneColors
 import io.a10vm.ui.page.main.widget.setting.BaseItemContainer
 import io.a10vm.ui.page.main.widget.setting.BlockingLoadingIndicator
 import io.a10vm.ui.page.main.widget.setting.NavigationItemWidget
+import io.a10vm.ui.page.main.widget.setting.PageLoadingIndicator
 import io.a10vm.ui.page.main.widget.setting.SegmentedColumn
 import io.a10vm.ui.theme.getMaterial3AppBarColor
 import io.a10vm.ui.theme.rememberMaterial3BlurBackdrop
@@ -149,22 +150,12 @@ fun RomListPage(useBlur: Boolean, mode: RomListMode = RomListMode.Manage, restor
                 bottom = paddingValues.calculateBottomPadding() + 24.dp,
             ),
         ) {
-            // 正在读：必须有自己的表示，否则会先闪一次「还没有 ROM」再突然变成列表。
+            // 正在读：占满内容区的一个加载态，数据到了整块换成列表，行由 SegmentedColumn 带入场动画。
             if (state.isLoading) {
                 item(key = "loading") {
-                    SegmentedColumn(title = "ROM") {
-                        item(key = "loading-row") {
-                            NavigationItemWidget(
-                                icon = AppIcons.Android,
-                                title = "正在读取 ROM…",
-                                description = "扫描安装包与已导入的包",
-                                onClick = {},
-                            )
-                        }
-                    }
+                    PageLoadingIndicator("正在读取 ROM…", Modifier.fillParentMaxSize())
                 }
-            }
-            if (state.isEmpty) {
+            } else if (state.isEmpty) {
                 item(key = "empty") {
                     SegmentedColumn(title = "ROM") {
                         item(key = "empty-row") {
@@ -177,25 +168,26 @@ fun RomListPage(useBlur: Boolean, mode: RomListMode = RomListMode.Manage, restor
                         }
                     }
                 }
-            }
-            state.groups.forEach { group ->
-                item(key = "group-" + group.title) {
-                    SegmentedColumn(title = group.title) {
-                        group.items.forEach { rom ->
-                            item(key = rom.rowId) { _ ->
-                                RomRow(
-                                    rom = rom,
-                                    pickMode = state.isPick,
-                                    onOpen = { navigator.push(Route.RomDetail(rom.rowId, state.isPick)) },
-                                    highlight = state.highlightKey == rom.key,
-                                    onHighlightFinished = { viewModel.dispatch(RomListAction.ConsumeFocus) },
-                                    onDelete = { viewModel.dispatch(RomListAction.RequestDelete(rom.rowId)) },
-                                    onCheck = { viewModel.dispatch(RomListAction.CheckRom(rom.rowId)) },
-                                    onRepair = { viewModel.dispatch(RomListAction.RequestRepair(rom.rowId)) },
-                                    onClearCache = { viewModel.dispatch(RomListAction.RequestClearCache(rom.rowId)) },
-                                    onCreate = { viewModel.dispatch(RomListAction.Create(rom.rowId)) },
-                                    onPick = { viewModel.dispatch(RomListAction.Pick(rom.rowId)) },
-                                )
+            } else {
+                state.groups.forEach { group ->
+                    item(key = "group-" + group.title) {
+                        SegmentedColumn(modifier = Modifier.animateItem(), title = group.title) {
+                            group.items.forEach { rom ->
+                                item(key = rom.rowId) { _ ->
+                                    RomRow(
+                                        rom = rom,
+                                        pickMode = state.isPick,
+                                        onOpen = { navigator.push(Route.RomDetail(rom.rowId, state.isPick)) },
+                                        highlight = state.highlightKey == rom.key,
+                                        onHighlightFinished = { viewModel.dispatch(RomListAction.ConsumeFocus) },
+                                        onDelete = { viewModel.dispatch(RomListAction.RequestDelete(rom.rowId)) },
+                                        onCheck = { viewModel.dispatch(RomListAction.CheckRom(rom.rowId)) },
+                                        onRepair = { viewModel.dispatch(RomListAction.RequestRepair(rom.rowId)) },
+                                        onClearCache = { viewModel.dispatch(RomListAction.RequestClearCache(rom.rowId)) },
+                                        onCreate = { viewModel.dispatch(RomListAction.Create(rom.rowId)) },
+                                        onPick = { viewModel.dispatch(RomListAction.Pick(rom.rowId)) },
+                                    )
+                                }
                             }
                         }
                     }
@@ -209,7 +201,7 @@ fun RomListPage(useBlur: Boolean, mode: RomListMode = RomListMode.Manage, restor
     // 定位：修复链带过来的 key 落到对应组（09/04 §2 第 4 步）。
     LaunchedEffect(state.highlightKey, state.blinkToken) {
         val key = state.highlightKey ?: return@LaunchedEffect
-        val index = romGroupIndex(state.groups, key, state.isLoading, state.isEmpty)
+        val index = romGroupIndex(state.groups, key)
         if (index >= 0) listState.animateScrollToItem(index)
     }
 
@@ -287,16 +279,8 @@ private val ROM_ZIP_TYPES = arrayOf("application/zip", "application/octet-stream
  * M3 把**一个组**渲染成一个 LazyColumn item（`SegmentedColumn` 内部再铺行），
  * 所以这里只能滚到组：目标行一定在组的第一屏内（同组 ROM 数量远小于一屏）。
  */
-private fun romGroupIndex(groups: List<RomGroup>, key: String, isLoading: Boolean, isEmpty: Boolean): Int {
-    var index = 0
-    if (isLoading) index++
-    if (isEmpty) index++
-    for (group in groups) {
-        if (group.items.any { it.key == key }) return index
-        index++
-    }
-    return -1
-}
+private fun romGroupIndex(groups: List<RomGroup>, key: String): Int =
+    groups.indexOfFirst { group -> group.items.any { it.key == key } }
 
 /** 一个 ROM 行：`BaseItemContainer` 承担分组形状与底色，行内只有库组件。 */
 @Composable
