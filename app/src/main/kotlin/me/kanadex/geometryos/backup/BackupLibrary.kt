@@ -7,11 +7,13 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.net.Uri
+import io.a10vm.core.ApplicationSingleton
 import java.io.File
 import java.nio.file.Files
 import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import me.kanadex.geometryos.rom.RomTexts
 
 /*
  * The private library indexes verified ZIPs for the list and owns their staging area.
@@ -98,23 +100,43 @@ internal class BackupLibrary(context: Context) {
         id
     }
 
-    fun import(uri: Uri, progress: (BackupArchive.Progress) -> Unit, checkActive: () -> Unit): UUID {
+    fun import(
+        uri: Uri,
+        progress: (BackupArchive.Progress) -> Unit,
+        checkActive: () -> Unit,
+        onStage: (String) -> Unit = {},
+    ): UUID {
         val work = newWorkspace()
         try {
             val staged = File(work, "incoming.zip")
+            val total = runCatching {
+                app.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
+            }.getOrNull() ?: -1L
+            onStage(backupCopyStage("正在复制备份文件", 0L, total))
             requireNotNull(app.contentResolver.openInputStream(uri)) { "无法读取备份文件" }.use { input ->
                 staged.outputStream().buffered().use { output ->
                     val bytes = ByteArray(DEFAULT_BUFFER_SIZE * 8)
+                    var copied = 0L
+                    var reported = 0L
                     while (true) {
                         checkActive()
                         val read = input.read(bytes)
                         if (read < 0) break
                         output.write(bytes, 0, read)
+                        copied += read
+                        val now = System.nanoTime()
+                        if (now - reported >= 500_000_000L) {
+                            reported = now
+                            onStage(backupCopyStage("正在复制备份文件", copied, total))
+                        }
                     }
+                    onStage(backupCopyStage("正在复制备份文件", copied, total))
                 }
             }
+            onStage("正在校验备份内容")
             val metadata = BackupArchive.verify(staged, progress, checkActive)
             checkActive()
+            onStage("正在登记备份")
             return publish(staged, metadata)
         } finally {
             work.deleteRecursively()
@@ -176,10 +198,14 @@ internal class BackupLibrary(context: Context) {
     }
 
     companion object {
-        @Volatile private var instance: BackupLibrary? = null
+        private val shared = ApplicationSingleton { BackupLibrary(it) }
 
-        fun get(context: Context): BackupLibrary = instance ?: synchronized(this) {
-            instance ?: BackupLibrary(context).also { instance = it }
-        }
+        fun get(context: Context): BackupLibrary = shared.of(context)
     }
+}
+
+// 复制阶段的进度文案：已复制字节总在，总量未知时只报已复制
+internal fun backupCopyStage(label: String, done: Long, total: Long): String {
+    val suffix = if (total > 0L) " / " + RomTexts.bytes(total) else ""
+    return label + " " + RomTexts.bytes(done) + suffix
 }

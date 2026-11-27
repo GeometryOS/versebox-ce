@@ -6,6 +6,7 @@ import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.util.Log
+import io.a10vm.core.ApplicationSingleton
 import java.io.File
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -30,12 +31,9 @@ class RecordStore private constructor(context: Context) {
         private const val TABLE_ROM_SIZE = "rom_extract_size"
         private const val MAX_ROWS = 500
 
-        @Volatile private var instance: RecordStore? = null
+        private val shared = ApplicationSingleton { RecordStore(it) }
 
-        fun get(context: Context): RecordStore =
-            instance ?: synchronized(this) {
-                instance ?: RecordStore(context.applicationContext).also { instance = it }
-            }
+        fun get(context: Context): RecordStore = shared.of(context)
     }
 
     private val appContext: Context = context.applicationContext

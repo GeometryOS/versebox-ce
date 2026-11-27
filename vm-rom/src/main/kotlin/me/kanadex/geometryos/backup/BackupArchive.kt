@@ -10,6 +10,7 @@ import java.nio.ByteBuffer
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.Path
+import java.nio.file.Paths
 import java.nio.file.StandardOpenOption.CREATE_NEW
 import java.nio.file.StandardOpenOption.WRITE
 import java.nio.file.attribute.BasicFileAttributes
@@ -26,12 +27,23 @@ import me.kanadex.geometryos.rom.toHex
 /*
  * The archive owns ZIP I/O, logical paths and integrity checks. Callers freeze the source
  * and own private staging paths. Only the caller can publish a staged VM or backup.
+ *
+ * The instance is described by an inventory rather than by ZIP entry types. Links whose
+ * target stays inside the instance root are stored root-relative; links that leave it keep
+ * their original text, because a guest resolves an absolute path inside its own namespace.
+ * Runtime endpoints (sockets, FIFOs, device nodes) live only while a guest process runs, so
+ * they are listed as omissions instead of failing the capture.
  */
 object BackupArchive {
     enum class Phase { Write, Verify, Restore, ReadRom }
     data class Progress(val phase: Phase, val files: Int, val totalFiles: Int, val bytes: Long)
 
-    private enum class Kind { Directory, File, Symlink, Hardlink }
+    // 条目被省略的原因与条数，供记录与审计展示；省略不等于失败
+    data class Omissions(val runtimeEntries: Int, val derivedLinks: Int, val literalLinks: Int)
+
+    private enum class Kind { Directory, File, Symlink, Link, Hardlink, Runtime }
+    private enum class RuntimeKind { Socket, Fifo, Device, Other }
+
     private data class Node(
         val path: String,
         val kind: Kind,
@@ -39,16 +51,28 @@ object BackupArchive {
         val modified: Long,
         val blob: BackupBlob? = null,
         val link: String? = null,
+        val runtime: RuntimeKind? = null,
     ) {
         val entry: String get() = "instance/tree/$path"
     }
 
     private data class Source(val node: Node, val file: Path)
-    private data class Index(val manifest: BackupManifest, val nodes: List<Node>, val zipEntries: Map<String, ZipEntry>)
+    private data class Scanned(val sources: List<Source>, val omitted: List<Node>, val omissions: Omissions)
+    private data class Index(
+        val manifest: BackupManifest,
+        val nodes: List<Node>,
+        val zipEntries: Map<String, ZipEntry>,
+        val omissions: Omissions,
+    )
 
     private const val MAX_NODES = 250_000
     private const val MAX_INVENTORY = 32 * 1024 * 1024
     private const val MAX_PATH_BYTES = 4096
+    private const val UNIX_TYPE_MASK = 0xF000
+    private const val UNIX_SOCKET = 0xC000
+    private const val UNIX_FIFO = 0x1000
+    private const val UNIX_CHARACTER = 0x2000
+    private const val UNIX_BLOCK = 0x6000
     private val permissions = PosixFilePermission.values().toList()
 
     fun write(
@@ -60,33 +84,36 @@ object BackupArchive {
         progress: (Progress) -> Unit = {},
         checkActive: () -> Unit = {},
         isDerivedLink: (String, String) -> Boolean = { _, _ -> false },
+        onOmitted: (Omissions) -> Unit = {},
     ): BackupManifest {
         val root = source.toPath().toAbsolutePath().normalize()
         require(Files.isDirectory(root, NOFOLLOW_LINKS)) { "Missing instance directory" }
         require(!output.toPath().toAbsolutePath().normalize().startsWith(root))
-        val sources = scan(root, checkActive, isDerivedLink)
+        val scanned = scan(root, checkActive, isDerivedLink)
+        onOmitted(scanned.omissions)
+        val total = scanned.sources.size + scanned.omitted.size
         var owned = false
         try {
             val manifest = Files.newOutputStream(output.toPath(), CREATE_NEW, WRITE).let { raw ->
                 owned = true
                 ZipOutputStream(raw.buffered()).use { zip ->
                     var bytes = 0L
-                    val nodes = sources.mapIndexed { index, (node, path) ->
+                    val nodes = scanned.sources.mapIndexed { index, (node, path) ->
                         checkActive()
                         val updated = if (node.kind == Kind.File) {
                             val blob = zip.put(node.entry) {
                                 Files.newInputStream(path, NOFOLLOW_LINKS).use { input ->
                                     transfer(input, zip, Files.size(path), checkActive) { count ->
-                                        progress(Progress(Phase.Write, index, sources.size, bytes + count))
+                                        progress(Progress(Phase.Write, index, total, bytes + count))
                                     }
                                 }
                             }
                             bytes = Math.addExact(bytes, blob.bytes)
                             node.copy(blob = blob)
                         } else node
-                        progress(Progress(Phase.Write, index + 1, sources.size, bytes))
+                        progress(Progress(Phase.Write, index + 1, total, bytes))
                         updated
-                    }
+                    } + scanned.omitted
                     val rom = originalRom?.let { romFile ->
                         zip.put(BackupManifestYaml.ROM) {
                             romFile.inputStream().use { input ->
@@ -118,8 +145,10 @@ object BackupArchive {
         archive: File,
         progress: (Progress) -> Unit = {},
         checkActive: () -> Unit = {},
+        onOmitted: (Omissions) -> Unit = {},
     ): BackupManifest = ZipFile(archive).use { zip ->
         val index = index(zip)
+        onOmitted(index.omissions)
         copyTree(zip, index, null, progress, checkActive)
         index.manifest.romArchive?.let { blob ->
             copyChecked(zip, index, BackupManifestYaml.ROM, blob, null, checkActive) {
@@ -171,40 +200,50 @@ object BackupArchive {
         }
     }
 
-    private fun scan(root: Path, checkActive: () -> Unit, isDerivedLink: (String, String) -> Boolean): List<Source> {
+    private fun scan(root: Path, checkActive: () -> Unit, isDerivedLink: (String, String) -> Boolean): Scanned {
         val hardlinks = mutableMapOf<Any, String>()
-        val result = mutableListOf<Source>()
+        val sources = mutableListOf<Source>()
+        val omitted = mutableListOf<Node>()
+        var derivedLinks = 0
+        var literalLinks = 0
         Files.walk(root).use { paths ->
             for (path in paths.iterator()) {
                 checkActive()
                 if (path == root) continue
-                require(result.size < MAX_NODES) { "Too many instance entries" }
+                require(sources.size + omitted.size < MAX_NODES) { "Too many instance entries" }
                 val logical = logicalPath(root, path)
                 validatePath(logical)
                 val attrs = Files.readAttributes(path, BasicFileAttributes::class.java, NOFOLLOW_LINKS)
                 val modified = attrs.lastModifiedTime().toMillis()
-                val node = when {
-                    attrs.isDirectory -> Node(logical, Kind.Directory, mode(path), modified)
-                    attrs.isSymbolicLink -> {
-                        val rawTarget = Files.readSymbolicLink(path)
-                        if (isDerivedLink(logical, rawTarget.toString())) continue
-                        val target = path.parent.resolve(rawTarget).normalize()
-                        require(target.startsWith(root) && target != root) { "Unportable symbolic link: $logical" }
+                if (attrs.isDirectory) {
+                    sources += Source(Node(logical, Kind.Directory, mode(path), modified), path)
+                } else if (attrs.isSymbolicLink) {
+                    val rawTarget = Files.readSymbolicLink(path).toString()
+                    val target = path.parent.resolve(rawTarget).normalize()
+                    if (isDerivedLink(logical, rawTarget)) {
+                        // 启动时按 ROM 清单重建，备份只需要报数
+                        derivedLinks++
+                    } else if (target.startsWith(root) && target != root) {
                         val link = logicalPath(root, target)
                         validatePath(link)
-                        Node(logical, Kind.Symlink, 0, modified, link = link)
+                        sources += Source(Node(logical, Kind.Symlink, 0, modified, link = link), path)
+                    } else {
+                        // 客体按自己的命名空间解析绝对路径，原样保存后语义不变
+                        validateLink(rawTarget)
+                        literalLinks++
+                        sources += Source(Node(logical, Kind.Link, 0, modified, link = rawTarget), path)
                     }
-                    attrs.isRegularFile -> {
-                        val previous = attrs.fileKey()?.let { hardlinks.putIfAbsent(it, logical) }
-                        if (previous == null) Node(logical, Kind.File, mode(path), modified)
-                        else Node(logical, Kind.Hardlink, 0, modified, link = previous)
-                    }
-                    else -> throw IllegalArgumentException("Unsupported instance entry: $logical")
+                } else if (attrs.isRegularFile) {
+                    val previous = attrs.fileKey()?.let { hardlinks.putIfAbsent(it, logical) }
+                    val node = if (previous == null) Node(logical, Kind.File, mode(path), modified)
+                    else Node(logical, Kind.Hardlink, 0, modified, link = previous)
+                    sources += Source(node, path)
+                } else {
+                    omitted += Node(logical, Kind.Runtime, 0, modified, runtime = runtimeKind(path))
                 }
-                result += Source(node, path)
             }
         }
-        return result
+        return Scanned(sources, omitted, Omissions(omitted.size, derivedLinks, literalLinks))
     }
 
     private fun copyTree(
@@ -228,7 +267,7 @@ object BackupArchive {
                     if (target != null) applyMetadata(target, node)
                     bytes = Math.addExact(bytes, blob.bytes)
                 }
-                Kind.Symlink, Kind.Hardlink -> Unit
+                Kind.Symlink, Kind.Link, Kind.Hardlink, Kind.Runtime -> Unit
             }
             progress(Progress(phase, offset + 1, total, bytes))
         }
@@ -241,6 +280,7 @@ object BackupArchive {
                         val path = root.resolve(node.path)
                         Files.createSymbolicLink(path, path.parent.relativize(root.resolve(checkNotNull(node.link))))
                     }
+                    Kind.Link -> Files.createSymbolicLink(root.resolve(node.path), Paths.get(checkNotNull(node.link)))
                     Kind.Hardlink -> Files.createLink(root.resolve(node.path), root.resolve(checkNotNull(node.link)))
                     else -> Unit
                 }
@@ -278,7 +318,8 @@ object BackupArchive {
         nodes.forEach { node -> node.blob?.let { expect(node.entry, it.bytes) } }
         manifest.romArchive?.let { expect(BackupManifestYaml.ROM, it.bytes) }
         require(entries.keys == expected) { "Unexpected ZIP entries" }
-        return Index(manifest, nodes, entries)
+        return Index(manifest, nodes, entries,
+            Omissions(nodes.count { it.kind == Kind.Runtime }, 0, nodes.count { it.kind == Kind.Link }))
     }
 
     private fun encodeInventory(nodes: List<Node>): ByteArray = buildString {
@@ -286,7 +327,7 @@ object BackupArchive {
             append(node.kind.name).append('\t').append(node.mode).append('\t').append(node.modified).append('\t')
             append(encodePath(node.path)).append('\t')
             append(node.blob?.bytes ?: 0).append('\t').append(node.blob?.sha256.orEmpty()).append('\t')
-            append(node.link?.let(::encodePath).orEmpty()).append('\n')
+            append(node.runtime?.name ?: node.link?.let(::encodePath).orEmpty()).append('\n')
         }
     }.toByteArray(Charsets.UTF_8).also { require(it.size <= MAX_INVENTORY) }
 
@@ -302,14 +343,26 @@ object BackupArchive {
             val mode = fields[1].toInt().also { require(it in 0..511) }
             val path = decodePath(fields[3])
             val size = fields[4].toLong()
-            val link = fields[6].takeIf { it.isNotEmpty() }?.let(::decodePath)
             val blob = if (kind == Kind.File) BackupBlob(size, fields[5]) else null
             require(blob != null || (size == 0L && fields[5].isEmpty()))
-            val parent = path.substringBeforeLast('/', "")
-            require(parent.isEmpty() || seen[parent]?.kind == Kind.Directory) { "Missing parent directory: $path" }
-            require((link != null) == (kind == Kind.Symlink || kind == Kind.Hardlink))
-            if (kind == Kind.Hardlink) require(seen[link]?.kind == Kind.File)
-            require(seen.put(path, Node(path, kind, mode, fields[2].toLong(), blob, link)) == null)
+            val extra = fields[6]
+            val node = when (kind) {
+                Kind.File -> Node(path, kind, mode, fields[2].toLong(), blob)
+                Kind.Directory -> {
+                    require(extra.isEmpty())
+                    Node(path, kind, mode, fields[2].toLong())
+                }
+                Kind.Symlink -> Node(path, kind, 0, fields[2].toLong(), link = decodePath(extra))
+                Kind.Link -> Node(path, kind, 0, fields[2].toLong(), link = decodeLink(extra))
+                Kind.Hardlink -> Node(path, kind, 0, fields[2].toLong(), link = decodePath(extra))
+                Kind.Runtime -> Node(path, kind, 0, fields[2].toLong(), runtime = RuntimeKind.valueOf(extra))
+            }
+            if (kind != Kind.Runtime) {
+                val parent = path.substringBeforeLast('/', "")
+                require(parent.isEmpty() || seen[parent]?.kind == Kind.Directory) { "Missing parent directory: $path" }
+            }
+            if (kind == Kind.Hardlink) require(node.link?.let { seen[it]?.kind } == Kind.File)
+            require(seen.put(path, node) == null)
         }
         return seen.values.toList()
     }
@@ -360,6 +413,31 @@ object BackupArchive {
         val path = Charsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(Base64.getUrlDecoder().decode(value))).toString()
         validatePath(path)
         return path
+    }
+
+    // 客体自定义的链接目标可能带空格或任意路径字符，只约束长度与控制字符
+    private fun validateLink(text: String) {
+        require(text.toByteArray(Charsets.UTF_8).size in 1..MAX_PATH_BYTES) { "Invalid link target" }
+        require(text.none { it.isISOControl() }) { "Invalid link target" }
+    }
+
+    private fun decodeLink(value: String): String {
+        require(value.length <= MAX_PATH_BYTES * 2)
+        val text = Charsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(Base64.getUrlDecoder().decode(value))).toString()
+        validateLink(text)
+        return text
+    }
+
+    // 取不到 unix:mode 的平台按其他处理，绝不因为无法分类而中止
+    private fun runtimeKind(path: Path): RuntimeKind = try {
+        when ((Files.getAttribute(path, "unix:mode") as Int) and UNIX_TYPE_MASK) {
+            UNIX_SOCKET -> RuntimeKind.Socket
+            UNIX_FIFO -> RuntimeKind.Fifo
+            UNIX_CHARACTER, UNIX_BLOCK -> RuntimeKind.Device
+            else -> RuntimeKind.Other
+        }
+    } catch (_: Exception) {
+        RuntimeKind.Other
     }
 
     private fun mode(path: Path): Int = try {

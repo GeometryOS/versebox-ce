@@ -36,7 +36,7 @@ internal data class BackupState(
     val isLoading: Boolean = true,
     val isLoadingDetail: Boolean = false,
     val progress: BackupArchive.Progress? = null,
-    val workLabel: String = "",
+    val stage: String = "",
     val working: Boolean = false,
     val error: String? = null,
     val message: String? = null,
@@ -46,7 +46,24 @@ internal data class BackupState(
     val pickedBackup: BackupLibrary.Row? = null,
 ) {
     val countLabel get() = if (isLoading) null else rows.size.toString() + " 个备份"
-    val progressText get() = progress?.let { workLabel + " " + it.files + "/" + it.totalFiles } ?: workLabel
+
+    /**
+     * 进度弹窗的唯一文案来源：归档阶段按 phase 取名并带条目计数，
+     * 其余阶段用调用方给的一句话。切换阶段时主线程只做一次字符串拼接。
+     */
+    val progressText: String get() {
+        val current = progress
+        if (current != null) {
+            val label = when (current.phase) {
+                BackupArchive.Phase.Write -> "正在写入备份包"
+                BackupArchive.Phase.Verify -> "正在校验备份包"
+                BackupArchive.Phase.Restore -> "正在恢复虚拟机文件"
+                BackupArchive.Phase.ReadRom -> "正在读取 ROM 原包"
+            }
+            return if (current.totalFiles > 0) label + " " + current.files + "/" + current.totalFiles else label
+        }
+        return stage.ifEmpty { "正在处理" }
+    }
 }
 
 internal sealed interface BackupAction {
@@ -93,8 +110,8 @@ internal class BackupViewModel(
             is BackupAction.Capture -> capture(action)
             BackupAction.ConsumeCaptured -> _state.update { it.copy(createdBackup = null) }
             is BackupAction.Pick -> _state.update { it.copy(pickedBackup = action.row) }
-            is BackupAction.Delete -> manage { library.delete(action.id) }
-            is BackupAction.Share -> manage { library.share(action.id) }
+            is BackupAction.Delete -> manage("正在删除备份") { library.delete(action.id) }
+            is BackupAction.Share -> manage("正在分享备份") { library.share(action.id) }
             BackupAction.DismissError -> _state.update { it.copy(error = null) }
             is BackupAction.ShowDetail -> showDetail(action.id)
             is BackupAction.SetName -> _state.update { it.copy(name = action.value) }
@@ -110,12 +127,13 @@ internal class BackupViewModel(
 
     private fun capture(action: BackupAction.Capture) {
         if (_state.value.working || prepared != null) return
-        _state.update { it.copy(working = true, workLabel = "正在备份虚拟机", progress = null, error = null) }
+        _state.update { it.copy(working = true, stage = "正在读取虚拟机设置", progress = null, error = null) }
         scope.launch {
             try {
-                val id = capture.create(action.vmId, action.includeRom) { value ->
-                    _state.update { it.copy(progress = value) }
-                }
+                val id = capture.create(action.vmId, action.includeRom,
+                    { value -> _state.update { it.copy(progress = value) } },
+                    { text -> _state.update { it.copy(stage = text) } },
+                )
                 _state.update { it.copy(working = false, progress = null, createdBackup = id) }
             } catch (cancel: kotlinx.coroutines.CancellationException) {
                 throw cancel
@@ -144,27 +162,44 @@ internal class BackupViewModel(
         }
     }
 
-    private fun manage(action: () -> Unit) {
+    private fun manage(stage: String, action: () -> Unit) {
+        if (_state.value.working) return
+        _state.update { it.copy(working = true, stage = stage, progress = null, error = null) }
         scope.launch(Dispatchers.IO) {
-            try { action() } catch (failure: Exception) { fail(failure.message ?: "操作失败") }
+            try {
+                action()
+            } catch (failure: Exception) {
+                fail(failure.message ?: "操作失败")
+            } finally {
+                _state.update { it.copy(working = false, progress = null) }
+            }
         }
     }
 
     private fun export(id: UUID, uri: Uri?) {
-        if (uri == null) return
+        if (uri == null || _state.value.working) return
+        _state.update { it.copy(working = true, stage = "正在导出备份", progress = null, error = null) }
         scope.launch(Dispatchers.IO) {
             runCatching { library.export(id, uri) }
                 .onSuccess { _state.update { it.copy(message = "备份已导出") } }
                 .onFailure { _state.update { it.copy(error = it.message ?: "导出失败") } }
+            _state.update { it.copy(working = false, stage = "") }
         }
     }
 
     private fun import(uri: Uri?) {
         if (uri == null || _state.value.working) return
         val token = ++generation
-        _state.update { it.copy(working = true, workLabel = "正在导入备份", progress = null, error = null) }
+        _state.update { it.copy(working = true, stage = "正在复制备份文件", progress = null, error = null) }
         scope.launch(Dispatchers.IO) {
-            runCatching { library.import(uri, { value -> _state.update { it.copy(progress = value) } }) { check(token == generation) } }
+            runCatching {
+                library.import(
+                    uri,
+                    { value -> _state.update { it.copy(progress = value) } },
+                    { check(token == generation) },
+                    { text -> _state.update { it.copy(stage = text) } },
+                )
+            }
                 .onSuccess { id -> _state.update { it.copy(working = false, selected = id, message = "备份已导入") }; refresh() }
                 .onFailure { _state.update { it.copy(working = false, error = it.message ?: "导入备份失败") } }
         }
@@ -173,21 +208,24 @@ internal class BackupViewModel(
     private fun restore(id: UUID, name: String?) {
         if (_state.value.working || prepared != null) return
         val token = ++generation
-        _state.update { it.copy(working = true, workLabel = "正在检查备份", progress = null, error = null, selected = id) }
+        _state.update { it.copy(working = true, stage = "正在读取备份清单", progress = null, error = null, selected = id) }
         scope.launch {
             try {
                 val value = withContext(Dispatchers.IO) {
                     val task = kotlinx.coroutines.currentCoroutineContext()
-                    restoration.prepare(id, { progress ->
-                        _state.update { it.copy(progress = progress) }
-                    }) {
-                        task.ensureActive()
-                        if (token != generation) throw kotlinx.coroutines.CancellationException("用户已取消")
-                    }
+                    restoration.prepare(
+                        id,
+                        { progress -> _state.update { it.copy(progress = progress) } },
+                        {
+                            task.ensureActive()
+                            if (token != generation) throw kotlinx.coroutines.CancellationException("用户已取消")
+                        },
+                        { text -> _state.update { it.copy(stage = text) } },
+                    )
                 }
                 prepared = value
                 _state.update { it.copy(working = false, pendingRomUri = value.romUri,
-                    name = name ?: value.manifest.settings.name, workLabel = "正在导入备份中的 ROM") }
+                    name = name ?: value.manifest.settings.name, stage = "正在导入备份中的 ROM") }
                 if (value.romUri == null) commitPrepared(value, null)
             } catch (failure: Exception) {
                 _state.update { it.copy(working = false, progress = null, error = failure.message ?: "恢复备份失败") }
@@ -211,14 +249,19 @@ internal class BackupViewModel(
 
     private fun commitPrepared(operation: BackupRestore.Prepared, imported: RomRepository.Outcome?) {
         if (_state.value.working) return
-        _state.update { it.copy(working = true, pendingRomUri = null, workLabel = "正在写入虚拟机文件") }
+        _state.update { it.copy(working = true, pendingRomUri = null, stage = "正在恢复虚拟机文件") }
         scope.launch {
             try {
                 val restored = withContext(Dispatchers.IO) {
                     val task = kotlinx.coroutines.currentCoroutineContext()
-                    restoration.commit(operation, _state.value.name, imported, { value ->
-                        _state.update { it.copy(progress = value) }
-                    }) { task.ensureActive() }
+                    restoration.commit(
+                        operation,
+                        _state.value.name,
+                        imported,
+                        { value -> _state.update { it.copy(progress = value) } },
+                        { task.ensureActive() },
+                        { text -> _state.update { it.copy(stage = text) } },
+                    )
                 }
                 prepared = null
                 appState.refresh()

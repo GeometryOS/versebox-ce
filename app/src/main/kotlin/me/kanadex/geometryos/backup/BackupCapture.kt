@@ -29,13 +29,20 @@ internal class BackupCapture(context: Context) {
     private val app = context.applicationContext
     private val library = BackupLibrary.get(app)
 
-    suspend fun create(id: String, includeRom: Boolean, publish: (BackupArchive.Progress) -> Unit): UUID =
-        VmService.captureStopped(id) { device, checkActive -> capture(device, includeRom, publish, checkActive) }
+    suspend fun create(
+        id: String,
+        includeRom: Boolean,
+        publish: (BackupArchive.Progress) -> Unit,
+        onStage: (String) -> Unit = {},
+    ): UUID = VmService.captureStopped(id) { device, checkActive ->
+        capture(device, includeRom, publish, onStage, checkActive)
+    }
 
     private fun capture(
         device: VmDevice,
         includeRom: Boolean,
         publish: (BackupArchive.Progress) -> Unit,
+        onStage: (String) -> Unit,
         checkActive: () -> Unit,
     ): UUID {
         val started = System.currentTimeMillis()
@@ -46,6 +53,7 @@ internal class BackupCapture(context: Context) {
         try {
             checkActive()
             require(!device.legacy && device.root.isNotEmpty()) { "旧布局实例尚无法创建完整备份" }
+            onStage("正在读取虚拟机设置")
             val work = library.newWorkspace()
             try {
                 val source = RomSource.entries.firstOrNull { it.name == device.romSource }
@@ -56,6 +64,10 @@ internal class BackupCapture(context: Context) {
                 events += "已读取名称、显示模式和 ROM 选择 " + selection.key
                 val rom = if (includeRom) {
                     val file = work.resolve("rom.zip")
+                    val total = row?.archiveBytes ?: 0L
+                    var copied = 0L
+                    var reported = 0L
+                    onStage(backupCopyStage("正在复制所选 ROM 原包", 0L, total))
                     repository.openBackupArchive(ref).use { input ->
                         file.outputStream().buffered().use { output ->
                             val buffer = ByteArray(64 * 1024)
@@ -64,9 +76,16 @@ internal class BackupCapture(context: Context) {
                                 val count = input.read(buffer)
                                 if (count < 0) break
                                 output.write(buffer, 0, count)
+                                copied += count
+                                val now = System.nanoTime()
+                                if (now - reported >= 500_000_000L) {
+                                    reported = now
+                                    onStage(backupCopyStage("正在复制所选 ROM 原包", copied, total))
+                                }
                             }
                         }
                     }
+                    onStage(backupCopyStage("正在复制所选 ROM 原包", copied, total))
                     val properties = RomPackage.read(file)
                     check(properties.key == selection.key && properties.payloadSha256 == selection.payloadSha256)
                     events += "已复制所选 ROM 原包 bytes=" + file.length()
@@ -91,12 +110,20 @@ internal class BackupCapture(context: Context) {
                         publish(value)
                     }
                 }
+                events += "正在写入备份包"
+                onStage("正在写入备份包")
                 val staged = work.resolve("backup.zip")
                 val root = VmRegistry.get(app).rootOf(device)
                 val manifest = BackupArchive.write(staged, root,
                     BackupVmSettings(device.name, device.displayMode, selection), client, rom, progress, checkActive,
-                    derivedLinks(repository, row, rom, root))
+                    derivedLinks(repository, row, rom, root),
+                    onOmitted = { omitted ->
+                        events += "省略运行期端点 " + omitted.runtimeEntries + " 个，派生链接 " + omitted.derivedLinks +
+                            " 个，按原文保存链接 " + omitted.literalLinks + " 个"
+                    })
                 checkActive()
+                events += "正在登记备份"
+                onStage("正在登记备份")
                 return library.publish(staged, manifest).also {
                     result = it
                     events += "已登记备份 " + it

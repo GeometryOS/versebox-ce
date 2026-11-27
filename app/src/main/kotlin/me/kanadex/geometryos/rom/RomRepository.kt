@@ -5,6 +5,7 @@ package me.kanadex.geometryos.rom
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import io.a10vm.core.ApplicationSingleton
 import io.a10vm.records.RecordCollector
 import io.a10vm.records.RecordKind
 import io.a10vm.records.RecordStatus
@@ -48,12 +49,9 @@ class RomRepository private constructor(context: Context) {
         private const val TAG = "VERSEROOM"
         private const val DISPLAY_MANIFEST = "native-display-inputs.json"
 
-        @Volatile private var instance: RomRepository? = null
+        private val shared = ApplicationSingleton { RomRepository(it) }
 
-        fun get(context: Context): RomRepository =
-            instance ?: synchronized(this) {
-                instance ?: RomRepository(context.applicationContext).also { instance = it }
-            }
+        fun get(context: Context): RomRepository = shared.of(context)
     }
 
     private val app = context.applicationContext

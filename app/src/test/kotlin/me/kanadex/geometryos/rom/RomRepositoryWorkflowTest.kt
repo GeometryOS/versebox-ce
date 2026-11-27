@@ -189,7 +189,7 @@ class RomRepositoryWorkflowTest {
         val original = registry.create(properties.key, properties.payloadSha256, RomSource.Imported.name)
         val root = registry.rootOf(original)
         val sentinel = "vm/rootfs/data/local/backup-sentinel"
-        root.resolve(sentinel).apply { parentFile.mkdirs(); writeText("original data") }
+        root.resolve(sentinel).apply { checkNotNull(parentFile).mkdirs(); writeText("original data") }
         val settings = BackupVmSettings(original.name, "480x800@240", BackupRomSelection(
             properties.id, properties.romVersion, properties.payloadSha256, RomSource.Imported.name, properties.name,
         ))

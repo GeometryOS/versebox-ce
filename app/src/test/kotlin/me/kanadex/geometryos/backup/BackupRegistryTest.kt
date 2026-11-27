@@ -30,7 +30,7 @@ class BackupRegistryTest {
         val source = checkNotNull(registry.find(original.id))
         val root = registry.rootOf(source)
         val path = "vm/rootfs/data/local/backup-sentinel"
-        root.resolve(path).apply { parentFile.mkdirs(); writeText("guest-data") }
+        root.resolve(path).apply { checkNotNull(parentFile).mkdirs(); writeText("guest-data") }
         val work = Files.createTempDirectory(context.filesDir.toPath(), "backup-fixture-").toFile()
         val zip = work.resolve("backup.zip")
         val settings = BackupVmSettings(source.name, source.displayMode, rom)

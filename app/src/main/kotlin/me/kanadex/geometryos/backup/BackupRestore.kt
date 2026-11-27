@@ -36,9 +36,15 @@ internal class BackupRestore(context: Context) {
         internal val events: MutableList<String>,
     )
 
-    fun prepare(id: UUID, publish: (BackupArchive.Progress) -> Unit, checkActive: () -> Unit): Prepared {
+    fun prepare(
+        id: UUID,
+        publish: (BackupArchive.Progress) -> Unit,
+        checkActive: () -> Unit,
+        onStage: (String) -> Unit = {},
+    ): Prepared {
         val startedAt = System.currentTimeMillis()
         val events = mutableListOf("读取备份 " + id)
+        onStage("正在读取备份清单")
         val work = library.newWorkspace()
         var manifest: BackupManifest? = null
         try {
@@ -58,9 +64,18 @@ internal class BackupRestore(context: Context) {
                 last = value
                 publish(value)
             }
-            check(BackupArchive.verify(archive, progress, checkActive) == meta)
+            onStage("正在校验备份内容")
+            val verified = BackupArchive.verify(
+                archive, progress = progress, checkActive = checkActive, onOmitted = { omitted ->
+                    events += "备份内省略运行期端点 " + omitted.runtimeEntries + " 个，按原文保存链接 " +
+                        omitted.literalLinks + " 个"
+                },
+            )
+            check(verified == meta)
             events += "备份条目已逐项校验"
             val romUri = meta.romArchive?.let {
+                onStage("正在提取备份中的 ROM")
+                events += "正在提取备份中的 ROM"
                 val rom = work.resolve("rom.zip")
                 check(BackupArchive.extractRom(archive, rom, progress, checkActive) == meta)
                 val selected = meta.settings.rom
@@ -80,6 +95,7 @@ internal class BackupRestore(context: Context) {
 
     fun commit(prepared: Prepared, name: String?, imported: RomRepository.Outcome?,
         publish: (BackupArchive.Progress) -> Unit = {}, checkActive: () -> Unit = {},
+        onStage: (String) -> Unit = {},
     ): VmDevice {
         val (manifest, events) = prepared.manifest to prepared.events
         try {
@@ -99,6 +115,7 @@ internal class BackupRestore(context: Context) {
                 selection
             }
             var lastReport = 0L
+            onStage("正在恢复虚拟机文件")
             check(BackupArchive.restoreTree(prepared.archive, prepared.tree, { progress ->
                 val now = System.nanoTime()
                 if (now - lastReport >= 1_000_000_000L || progress.files == progress.totalFiles) {
@@ -108,6 +125,8 @@ internal class BackupRestore(context: Context) {
                 }
             }, checkActive) == manifest)
             checkActive()
+            onStage("正在登记新虚拟机")
+            events += "正在登记新虚拟机"
             val device = registry.commitRestored(source.copy(name = name ?: source.name, rom = binding), prepared.tree)
             events += "新实例设置写入并读回成功 id=" + device.id
             record(manifest.id, manifest, prepared.startedAt, events, device, null)

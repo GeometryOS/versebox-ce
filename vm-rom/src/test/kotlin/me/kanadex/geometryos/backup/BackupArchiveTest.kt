@@ -3,7 +3,12 @@
 package me.kanadex.geometryos.backup
 
 import java.io.File
+import java.net.StandardProtocolFamily
+import java.net.UnixDomainSocketAddress
+import java.nio.channels.ServerSocketChannel
 import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Paths
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
@@ -94,6 +99,40 @@ class BackupArchiveTest {
         assertTrue(Files.isSymbolicLink(restored.resolve("data-link").toPath()))
         assertEquals("keep guest data", restored.resolve("data-link").readText())
         assertTrue(Files.isSameFile(restored.resolve("data-hard-link").toPath(), restored.resolve(sentinel).toPath()))
+    }
+
+    @Test fun omitsRuntimeEndpointsAndKeepsLinksThatLeaveTheInstance() {
+        val source = vmTree()
+        if (!Files.getFileStore(source.toPath()).supportsFileAttributeView("posix")) return
+        val socket = source.resolve("vm/sock/zygote").toPath()
+        Files.createDirectories(socket.parent)
+        val channel = try {
+            ServerSocketChannel.open(StandardProtocolFamily.UNIX).apply { bind(UnixDomainSocketAddress.of(socket)) }
+        } catch (_: UnsupportedOperationException) {
+            return
+        } catch (_: java.io.IOException) {
+            return
+        }
+        try {
+            val guestAbsolute = source.resolve("vm/rootfs/sdcard").toPath()
+            Files.createDirectories(guestAbsolute.parent)
+            Files.createSymbolicLink(guestAbsolute, Paths.get("/storage/self/primary"))
+            val archive = File(temp.root, "endpoints.zip")
+            var omitted: BackupArchive.Omissions? = null
+            BackupArchive.write(archive, source, settings, client, null, onOmitted = { omitted = it })
+            assertEquals(BackupArchive.Omissions(1, 0, 1), omitted)
+            omitted = null
+            BackupArchive.verify(archive, onOmitted = { omitted = it })
+            assertEquals(1, checkNotNull(omitted).runtimeEntries)
+            val restored = File(temp.root, "endpoints-restored")
+            BackupArchive.restoreTree(archive, restored)
+            assertFalse(Files.exists(restored.resolve("vm/sock/zygote").toPath(), LinkOption.NOFOLLOW_LINKS))
+            val link = restored.resolve("vm/rootfs/sdcard").toPath()
+            assertTrue(Files.isSymbolicLink(link))
+            assertEquals("/storage/self/primary", Files.readSymbolicLink(link).toString())
+        } finally {
+            channel.close()
+        }
     }
 
     private fun vmTree(): File = temp.newFolder().apply {

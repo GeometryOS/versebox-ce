@@ -7,6 +7,7 @@ import android.database.sqlite.SQLiteConstraintException
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.util.Log
+import io.a10vm.core.ApplicationSingleton
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -61,12 +62,9 @@ class VmRegistry private constructor(context: Context) {
         private const val LEGACY_A9 = "a9-state"
         const val MAX_NAME_LENGTH = 24
 
-        @Volatile private var instance: VmRegistry? = null
+        private val shared = ApplicationSingleton { VmRegistry(it) }
 
-        fun get(context: Context): VmRegistry =
-            instance ?: synchronized(this) {
-                instance ?: VmRegistry(context.applicationContext).also { instance = it }
-            }
+        fun get(context: Context): VmRegistry = shared.of(context)
 
         /**
          * 名字归一化：展示值与比较值一起返回。
