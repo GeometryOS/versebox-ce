@@ -7,7 +7,7 @@
 | 目录 | 内容 |
 | --- | --- |
 | [ROM-EMBED](ROM-EMBED/README.md) | ROM 版本选择、发布清单校验、APK stage 与 app CI |
-| [Wall of Shame](WALL-OF-SHAME/01-CI-APK-MISSING-WINDOW-BRIDGE.md) | CI APK packaging incident and release rules |
+| Wall of Shame | [01. Missing host window bridge](WALL-OF-SHAME/01-CI-APK-MISSING-WINDOW-BRIDGE.md) · [02. Unresolved A9 ROM preload](WALL-OF-SHAME/02-CI-A9-ROM-MISSING-HEALTHD-PRELOAD.md) |
 
 ## 仓库边界
 

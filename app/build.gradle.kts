@@ -860,6 +860,23 @@ fun romAssetReport(zipFile: File): Pair<List<String>, MutableMap<String, Any?>> 
         dataNames.firstOrNull { !it.startsWith("payload/") }?.let { problems += "清单条目不指向 payload/：" + it }
         @Suppress("UNCHECKED_CAST")
         val files = manifest?.get("files") as? List<Map<String, Any?>>
+        val logicals = files.orEmpty().mapNotNull { it["logical"] as? String }.toSet()
+        val preloads = manifest?.get("extraPreloads")
+        if (manifest?.containsKey("extraPreloads") == true) {
+            if (preloads !is List<*> || preloads.any { it !is String || it.isBlank() }) {
+                problems += "清单 extraPreloads 必须是非空逻辑名的列表"
+            } else {
+                preloads.filterNot { it in logicals }.forEach {
+                    problems += "清单 extraPreloads 引用了未声明的 files[].logical：$it"
+                }
+            }
+        }
+        val runtimeProfile = manifest?.get("runtimeProfile") as? Map<*, *>
+        if (runtimeProfile?.get("installer") == true && runtimeProfile["dexoptShim"] == true &&
+            "liba9vm-dexopt-shim.so" !in logicals
+        ) {
+            problems += "清单 runtimeProfile.dexoptShim 缺少 files[].logical：liba9vm-dexopt-shim.so"
+        }
         val libPaths = files?.mapNotNull { it["libPath"] as? String }
             ?.filter { it.isNotEmpty() }
             .orEmpty()
