@@ -38,9 +38,9 @@ import top.yukonga.miuix.kmp.window.WindowListPopup
  * 元数据由 ROM repository 快照生成；页面不读文件、不查数据库，也不执行解包操作。
  */
 @Composable
-fun MiuixRomDetailPage(rowId: String, mode: RomListMode, useBlur: Boolean) {
+fun MiuixRomDetailPage(rowId: String, mode: RomListMode, useBlur: Boolean, backupId: String? = null) {
     val navigator = LocalNavigator.current
-    val viewModel = rememberRomDetailViewModel(rowId, mode)
+    val viewModel = rememberRomDetailViewModel(rowId, mode, backupId)
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var menuExpanded by remember { mutableStateOf(false) }

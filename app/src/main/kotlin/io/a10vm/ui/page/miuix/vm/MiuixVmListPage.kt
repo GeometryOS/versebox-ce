@@ -80,6 +80,7 @@ fun MiuixVmListPage(
     val devices by appState.devices.collectAsStateWithLifecycle()
     val runtimes by appState.runtimes.collectAsStateWithLifecycle()
     val devicesLoaded by appState.devicesLoaded.collectAsStateWithLifecycle()
+    val backup = me.kanadex.geometryos.backup.LocalBackup.current
 
     var renameTarget by remember { mutableStateOf<VmDevice?>(null) }
     var stopTarget by remember { mutableStateOf<VmDevice?>(null) }
@@ -108,6 +109,7 @@ fun MiuixVmListPage(
                 onClick = { navigator.push(Route.VmManage(device.id)) },
                 onLaunch = { VmActions.launch(context, appState, device, runtime) },
                 onStop = { stopTarget = device },
+                onBackup = { backup.dispatch(me.kanadex.geometryos.backup.BackupAction.Capture(device.id)) },
                 onRename = { renameTarget = device },
             )
         }
@@ -155,6 +157,7 @@ private fun MiuixVmCard(
     onRename: () -> Unit,
     onLaunch: () -> Unit,
     onStop: () -> Unit,
+    onBackup: () -> Unit,
 ) {
     // 菜单弹层以这张卡的「更多」按钮为锚点，与记录页右上角筛选同款交互。
     var menuOpen by remember { mutableStateOf(false) }
@@ -250,6 +253,10 @@ private fun MiuixVmCard(
                                 onRename()
                             },
                         )
+                        BasicComponent(title = "备份虚拟机", onClick = {
+                            menuOpen = false
+                            onBackup()
+                        })
                         if (VmActions.canStop(runtime)) {
                             BasicComponent(
                                 title = "停止虚拟机",

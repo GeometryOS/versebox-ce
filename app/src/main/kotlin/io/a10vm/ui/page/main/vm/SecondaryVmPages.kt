@@ -171,9 +171,18 @@ fun CreateVmPage(useBlur: Boolean) {
                             icon = AppIcons.Android,
                             title = "ROM",
                             // 摘要由逻辑层拼好：`Android 15 V1.0.0 · 内置`（含版本号与来源）。
-                            description = state.romSummary.ifBlank { "点击选择要安装的系统" },
+                            description = state.romSummary.ifBlank { "未选择" },
                             onClick = { navigator.push(Route.RomList(pickForCreate = true)) },
                         )
+                    }
+                }
+            }
+            item {
+                SegmentedColumn(title = "备份与恢复") {
+                    item {
+                        NavigationItemWidget(icon = AppIcons.Save, title = "从备份创建",
+                            description = state.backupSummary,
+                            onClick = { navigator.push(Route.BackupList(pick = true)) })
                     }
                 }
             }
@@ -203,6 +212,7 @@ fun CreateVmPage(useBlur: Boolean) {
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun VmManagePage(id: String, useBlur: Boolean) {
+    val backup = me.kanadex.geometryos.backup.LocalBackup.current
     val navigator = LocalNavigator.current
     val context = LocalContext.current
     val appState = LocalAppState.current
@@ -475,6 +485,13 @@ fun VmManagePage(id: String, useBlur: Boolean) {
             }
 
             item {
+                SegmentedColumn(title = "备份") {
+                    item {
+                        NavigationItemWidget(icon = AppIcons.Save, title = "备份虚拟机", description = "", onClick = {
+                            backup.dispatch(me.kanadex.geometryos.backup.BackupAction.Capture(id))
+                        })
+                    }
+                }
                 SegmentedColumn(title = "记录与删除") {
                     item {
                         NavigationItemWidget(

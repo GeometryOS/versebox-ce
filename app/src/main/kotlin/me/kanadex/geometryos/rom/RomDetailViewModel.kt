@@ -10,6 +10,7 @@ import androidx.compose.ui.platform.LocalContext
 import io.a10vm.ui.verse.AppState
 import io.a10vm.ui.verse.LocalAppState
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -55,14 +56,29 @@ class RomDetailViewModel(
     scope: CoroutineScope,
     private val rowId: String,
     private val mode: RomListMode,
+    private val backupId: String? = null,
 ) {
-    private val operations = RomListViewModel(context, appState, scope, mode)
+    private val romOperations = if (backupId == null) RomListViewModel(context, appState, scope, mode) else null
     private val _state = MutableStateFlow(RomDetailState())
     val state: StateFlow<RomDetailState> = _state.asStateFlow()
 
     init {
         scope.launch {
-            operations.state.collect { list ->
+            if (backupId != null) {
+                val loaded = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    val task = kotlinx.coroutines.currentCoroutineContext()
+                    runCatching {
+                        me.kanadex.geometryos.backup.BackupLibrary.get(context)
+                            .readEmbeddedRom(java.util.UUID.fromString(backupId)) { task.ensureActive() }
+                            .toRow(RomSource.Imported, RomState.Pending)
+                    }
+                }
+                val row = loaded.getOrNull()
+                _state.value = RomDetailState(row = row, sections = row?.let(RomTexts::detailSections).orEmpty(),
+                    isLoading = false, message = loaded.exceptionOrNull()?.message)
+                return@launch
+            }
+            checkNotNull(romOperations).state.collect { list ->
                 val row = list.rows.firstOrNull { it.rowId == rowId }
                 val item = list.groups.asSequence().flatMap { it.items.asSequence() }
                     .firstOrNull { it.rowId == rowId }
@@ -85,6 +101,7 @@ class RomDetailViewModel(
     }
 
     fun dispatch(action: RomDetailAction) {
+        val operations = romOperations ?: return
         when (action) {
             RomDetailAction.Refresh -> operations.dispatch(RomListAction.Refresh)
             RomDetailAction.Check -> operations.dispatch(RomListAction.CheckRom(rowId))
@@ -112,11 +129,11 @@ class RomDetailViewModel(
 
 
 @Composable
-fun rememberRomDetailViewModel(rowId: String, mode: RomListMode): RomDetailViewModel {
+fun rememberRomDetailViewModel(rowId: String, mode: RomListMode, backupId: String? = null): RomDetailViewModel {
     val context = LocalContext.current
     val appState = LocalAppState.current
     val scope = rememberCoroutineScope()
-    return remember(context, appState, scope, rowId, mode) {
-        RomDetailViewModel(context, appState, scope, rowId, mode)
+    return remember(context, appState, scope, rowId, mode, backupId) {
+        RomDetailViewModel(context, appState, scope, rowId, mode, backupId)
     }
 }

@@ -29,6 +29,13 @@ import io.a10vm.records.RecordStore
 import io.a10vm.runtime.VmRegistry
 import io.a10vm.runtime.VmRomResolutionCache
 import io.a10vm.runtime.romBinding
+import me.kanadex.geometryos.backup.BackupArchive
+import me.kanadex.geometryos.backup.BackupClient
+import me.kanadex.geometryos.backup.BackupLibrary
+import me.kanadex.geometryos.backup.BackupRestore
+import me.kanadex.geometryos.backup.BackupRomSelection
+import me.kanadex.geometryos.backup.BackupVmSettings
+import me.kanadex.geometryos.boot.BootGateSequence
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -86,6 +93,12 @@ class RomRepositoryWorkflowTest {
         val imported = repository.importFromUri(uri) {}
         assertFalse(imported.duplicate)
         runBlocking { RecordCollector.awaitOperationArchives("rom") }
+        val backupRom = File(work, "backup-rom.zip")
+        repository.openBackupArchive(RomRef(imported.row.key, imported.row.source, imported.row.payloadSha256)).use { input ->
+            backupRom.outputStream().use(input::copyTo)
+        }
+        assertEquals(sourceZip.length(), backupRom.length())
+        assertEquals(payloadSha, RomPackage.read(backupRom).payloadSha256)
 
         val device = VmRegistry.get(context).create(imported.row.key, payloadSha, RomSource.Imported.name)
         val rows = repository.rows()
@@ -160,6 +173,62 @@ class RomRepositoryWorkflowTest {
         assertTrue(registry.setRomId(device.id, imported.row.key, payloadSha, imported.row.source.name))
         assertEquals(revision, repository.revision.value)
         assertEquals(romDir.canonicalFile, resolve()?.romRoot?.canonicalFile)
+    }
+
+    @Test
+    fun restoreRoutesEmbeddedRomThroughImportEvenWhenAlreadyInstalled() {
+        val context = RuntimeEnvironment.getApplication()
+        val work = Files.createTempDirectory(context.cacheDir.toPath(), "backup-rom-workflow-").toFile()
+        val archive = createRomFixture(work, "guest boot fixture")
+        val properties = RomPackage.read(archive)
+        val repository = RomRepository.get(context)
+        val registry = VmRegistry.get(context)
+        val library = BackupLibrary.get(context)
+        val restore = BackupRestore(context)
+        org.robolectric.shadows.ShadowStatFs.registerStats(context.filesDir, 1_000_000, 1_000_000, 1_000_000)
+        val original = registry.create(properties.key, properties.payloadSha256, RomSource.Imported.name)
+        val root = registry.rootOf(original)
+        val sentinel = "vm/rootfs/data/local/backup-sentinel"
+        root.resolve(sentinel).apply { parentFile.mkdirs(); writeText("original data") }
+        val settings = BackupVmSettings(original.name, "480x800@240", BackupRomSelection(
+            properties.id, properties.romVersion, properties.payloadSha256, RomSource.Imported.name, properties.name,
+        ))
+        val staged = work.resolve("backup.zip")
+        val manifest = BackupArchive.write(staged, root, settings, BackupClient(context.packageName, "test", 1), archive)
+        val id = library.publish(staged, manifest)
+        assertEquals(id, library.rows().single().id)
+        assertTrue(repository.rowFor(RomRef(properties.key, RomSource.Imported, properties.payloadSha256)) == null)
+        val vmIds = mutableSetOf(original.id)
+        repeat(2) { index ->
+            val prepared = restore.prepare(id, {}, {})
+            val outcome = repository.importFromUri(checkNotNull(prepared.romUri)) {}
+            assertEquals(index == 1, outcome.duplicate)
+            val instance = restore.commit(prepared, "备份恢复 " + (index + 1), outcome)
+            assertTrue(vmIds.add(instance.id))
+            assertEquals(settings.displayMode, instance.displayMode)
+            assertEquals(properties.payloadSha256, instance.romPayload)
+            assertEquals("original data", registry.rootOf(instance).resolve(sentinel).readText())
+            if (index == 1) runBlocking {
+                val binding = RomRef(instance.romId, outcome.row.source, instance.romPayload)
+                val extracted = repository.specOf(outcome.row).romRoot!!
+                assertTrue(extracted.resolve("payload/rootfs/system/build.prop").delete())
+                val sequence = BootGateSequence(context.resources)
+                suspend fun gate() = sequence.run(
+                    binding = { binding },
+                    entries = { repository.versionEntries()[properties.id].orEmpty() },
+                    inspect = { ref -> repository.rowFor(ref)?.let { row ->
+                        BootGateSequence.Inspection(repository.gate(row), row.key, row.rowId)
+                    } },
+                    ask = { false },
+                )
+                assertEquals(BootGateSequence.Result.Repair(outcome.row.key, outcome.row.rowId), gate())
+                repository.ensureUsable(outcome.row.key, outcome.row.payloadSha256, {})
+                assertEquals(BootGateSequence.Result.Start, gate())
+                assertEquals("original data", registry.rootOf(instance).resolve(sentinel).readText())
+            }
+        }
+        assertEquals("original data", root.resolve(sentinel).readText())
+        runBlocking { RecordCollector.awaitOperationArchives("rom") }
     }
 
     private fun createRomFixture(work: File, payloadText: String): File {

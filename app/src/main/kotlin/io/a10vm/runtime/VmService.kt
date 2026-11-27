@@ -23,7 +23,12 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 虚拟机运行服务。
@@ -68,6 +73,22 @@ class VmService : Service() {
         private val ACTIONS = setOf(INSPECT, START, STOP, CHECK_DESKTOP, INSTALL_APK,
             IMPORT_APPS, IMPORT_FILES, ENABLE_MICROPHONE, ENABLE_CAMERA, DELETE)
         private val windows = ConcurrentHashMap<String, NativeWindow>()
+
+        private var activeService: VmService? = null
+
+        internal suspend fun <T> captureStopped(id: String, capture: (VmDevice, () -> Unit) -> T): T {
+            val caller = currentCoroutineContext()
+            val result = withContext(Dispatchers.Main.immediate) {
+                val service = checkNotNull(activeService) { "虚拟机服务尚未连接" }
+                service.enqueueCapture(id) { device ->
+                    capture(device) {
+                        caller.ensureActive()
+                        check(!service.destroyed) { "虚拟机服务已断开" }
+                    }
+                }
+            }
+            return result.await()
+        }
 
         fun window(device: String): NativeWindow? = windows[device]
     }
@@ -176,6 +197,7 @@ class VmService : Service() {
         val worker = Executors.newSingleThreadExecutor { task -> Thread(task, "a10vm-vm-$id") }
         val diagnostics = Executors.newSingleThreadExecutor { task -> Thread(task, "a10vm-diag-$id") }
         val busy = AtomicBoolean()
+        @Volatile var capturing = false
         val stopRequested = AtomicBoolean()
 
         /** 强制停止只排一次（重复点停止不会叠加多个看门狗）。 */
@@ -212,6 +234,7 @@ class VmService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        activeService = this
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(CHANNEL, "Android 虚拟机", NotificationManager.IMPORTANCE_LOW),
         )
@@ -231,6 +254,29 @@ class VmService : Service() {
         instances.computeIfAbsent(device.id) { Instance(device) }
 
     private fun instance(id: String): Instance? = registry.find(id)?.let { instance(it) }
+
+    private fun <T> enqueueCapture(id: String, capture: (VmDevice) -> T): CompletableDeferred<T> {
+        val inst = checkNotNull(instances[id]) { "虚拟机状态尚未加载" }
+        check(!destroyed && !inst.deleted && inst.state == "IDLE" && inst.session?.isClosed != false &&
+            !inst.powerBusy && !inst.forceStopScheduled.get() && inst.busy.compareAndSet(false, true)) {
+            "请先关闭虚拟机并等待操作结束"
+        }
+        // Command admission and capture reservation both run on the service main thread.
+        inst.capturing = true
+        val result = CompletableDeferred<T>()
+        inst.worker.execute {
+            val outcome = runCatching {
+                val device = checkNotNull(registry.find(id)) { "虚拟机已不存在" }
+                capture(device)
+            }
+            inst.busy.set(false)
+            inst.capturing = false
+            outcome.fold(result::complete, result::completeExceptionally)
+            publish(inst)
+        }
+        publish(inst)
+        return result
+    }
 
     /**
      * 会话在第一次真正需要时才创建：服务被系统拉起时不预热任何一个客体的设备桥，
@@ -368,7 +414,7 @@ class VmService : Service() {
     }
 
     private fun handleCommand(command: Intent, action: String, inst: Instance, device: VmDevice): Int {
-        if (inst.deleted) return START_NOT_STICKY
+        if (inst.deleted || inst.capturing) return START_NOT_STICKY
         if (action == START && inst.session?.alive == true && !inst.busy.get()) {
             publish(inst)
             return START_NOT_STICKY
@@ -1010,6 +1056,7 @@ class VmService : Service() {
     } catch (_: RemoteException) { false }
 
     override fun onDestroy() {
+        if (activeService === this) activeService = null
         destroyed = true
         watcher.shutdownNow()
         diagnostics.shutdown()

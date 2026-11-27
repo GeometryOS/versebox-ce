@@ -82,6 +82,7 @@ fun VmListPage(
     val devices by appState.devices.collectAsStateWithLifecycle()
     val runtimes by appState.runtimes.collectAsStateWithLifecycle()
     val devicesLoaded by appState.devicesLoaded.collectAsStateWithLifecycle()
+    val backup = me.kanadex.geometryos.backup.LocalBackup.current
 
     var renameTarget by remember { mutableStateOf<VmDevice?>(null) }
     var stopTarget by remember { mutableStateOf<VmDevice?>(null) }
@@ -148,6 +149,7 @@ fun VmListPage(
                     onManage = { navigator.push(Route.VmManage(device.id)) },
                     onLaunch = { VmActions.launch(context, appState, device, runtime) },
                     onStop = { stopTarget = device },
+                    onBackup = { backup.dispatch(me.kanadex.geometryos.backup.BackupAction.Capture(device.id)) },
                 )
             }
         }
@@ -196,6 +198,7 @@ private fun VmCard(
     onManage: () -> Unit,
     onLaunch: () -> Unit,
     onStop: () -> Unit,
+    onBackup: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
 
@@ -266,6 +269,10 @@ private fun VmCard(
                             onRename()
                         },
                     )
+                    DropdownMenuItem(text = { Text("备份虚拟机") }, onClick = {
+                        menuExpanded = false
+                        onBackup()
+                    })
                     if (VmActions.canStop(runtime)) {
                         DropdownMenuItem(
                             text = { Text("停止虚拟机", color = MaterialTheme.colorScheme.error) },

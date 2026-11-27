@@ -70,6 +70,7 @@ fun HomePage(
     val navigator = LocalNavigator.current
     val uriHandler = LocalUriHandler.current
     val appState = LocalAppState.current
+    val backupState by me.kanadex.geometryos.backup.LocalBackup.current.state.collectAsStateWithLifecycle()
     val devices by appState.devices.collectAsStateWithLifecycle()
     val runtimes by appState.runtimes.collectAsStateWithLifecycle()
     val limit by appState.childLimit.collectAsStateWithLifecycle()
@@ -152,6 +153,16 @@ fun HomePage(
                         value = VmActions.vmCountLabel(runtimes, devices.size),
                         onClick = onNavigateToVms,
                     )
+                }
+            }
+
+            item {
+                SegmentedColumn {
+                    item {
+                        io.a10vm.ui.page.main.widget.setting.NavigationItemWidget(icon = io.a10vm.ui.icons.AppIcons.Save,
+                            title = "备份管理", description = backupState.countLabel.orEmpty(),
+                            onClick = { navigator.push(Route.BackupList()) })
+                    }
                 }
             }
 

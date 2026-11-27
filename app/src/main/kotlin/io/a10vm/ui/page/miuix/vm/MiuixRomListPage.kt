@@ -72,10 +72,22 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  * 并套 [miuixCardInset]（与 `MiuixHistoryPage` 的 items 写法一致）。
  */
 @Composable
-fun MiuixRomListPage(useBlur: Boolean, mode: RomListMode = RomListMode.Manage) {
+fun MiuixRomListPage(useBlur: Boolean, mode: RomListMode = RomListMode.Manage, restoreImport: Boolean = false) {
     val navigator = LocalNavigator.current
     val viewModel = rememberRomListViewModel(mode)
+    val backupForSelection = me.kanadex.geometryos.backup.LocalBackup.current
     val state by viewModel.state.collectAsStateWithLifecycle()
+    if (restoreImport) {
+        val backup = me.kanadex.geometryos.backup.LocalBackup.current
+        val request by backup.state.collectAsStateWithLifecycle()
+        LaunchedEffect(request.pendingRomUri) {
+            val uri = request.pendingRomUri ?: return@LaunchedEffect
+            viewModel.dispatch(RomListAction.Import(uri) { result ->
+                navigator.pop()
+                backup.dispatch(me.kanadex.geometryos.backup.BackupAction.RomImported(result))
+            })
+        }
+    }
     val snackbarHostState = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
 
@@ -90,6 +102,7 @@ fun MiuixRomListPage(useBlur: Boolean, mode: RomListMode = RomListMode.Manage) {
     // 选择模式：选完立刻回上一页（不在这一页创建）。
     LaunchedEffect(state.pickedKey) {
         if (state.pickedKey == null) return@LaunchedEffect
+        if (mode == RomListMode.Pick) backupForSelection.dispatch(me.kanadex.geometryos.backup.BackupAction.Pick(null))
         viewModel.dispatch(RomListAction.ConsumePicked)
         navigator.pop()
     }

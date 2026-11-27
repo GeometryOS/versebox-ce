@@ -51,6 +51,10 @@ enum class RecordKind(val label: String) {
     ROM_REPAIR("自动修复 ROM"),
     ROM_REEXTRACT("重新解包 ROM"),
     ROM_CLEAR_CACHE("清理解包体"),
+
+    BACKUP_VM("备份虚拟机"),
+    RESTORE_VM("恢复虚拟机"),
+    VM_BACKUP_MANAGE("管理虚拟机备份"),
 }
 
 enum class RecordStatus(val label: String) {

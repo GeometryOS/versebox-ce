@@ -15,6 +15,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import me.kanadex.geometryos.backup.BackupAction
+import me.kanadex.geometryos.backup.BackupViewModel
+import me.kanadex.geometryos.backup.LocalBackup
 import me.kanadex.geometryos.rom.RomRow
 import me.kanadex.geometryos.rom.RomTexts
 
@@ -31,6 +34,7 @@ data class CreateVmState(
      */
     val romSummary: String = "",
     val name: String = "",
+    val backupSummary: String = "未选择",
     val error: String? = null,
     /** 创建成功后由 UI 消费：拿到 id 就跳转管理页并清掉它。 */
     val createdId: String? = null,
@@ -59,7 +63,8 @@ sealed interface CreateVmAction {
  *  3. 需要默认值时，两个字段**一起写回**；
  *  4. 默认值只在「从来没有选过」时落一次，不覆盖用户已经选过的项。
  */
-class CreateVmViewModel(private val appState: AppState, private val scope: CoroutineScope) {
+internal class CreateVmViewModel(private val appState: AppState, private val scope: CoroutineScope,
+    private val backup: BackupViewModel) {
 
     private val _state = MutableStateFlow(
         CreateVmState(
@@ -70,6 +75,20 @@ class CreateVmViewModel(private val appState: AppState, private val scope: Corou
     val state: StateFlow<CreateVmState> = _state.asStateFlow()
 
     init {
+        scope.launch {
+            var previous: java.util.UUID? = null
+            backup.state.collect { value ->
+                val selected = value.pickedBackup
+                if (selected?.id == previous) return@collect
+                previous = selected?.id
+                if (selected != null) {
+                    appState.createVmRomId.value = null
+                    appState.createVmRowId.value = null
+                }
+                _state.update { it.copy(backupSummary = selected?.name ?: "未选择", name = selected?.name ?: it.name) }
+                publish(appState.romRows.value)
+            }
+        }
         // 摘要与默认值都来自**行**（RomRow）：RomSpec 只有名称，没有版本号、来源与内容指纹。
         scope.launch {
             appState.romRows.collect { rows ->
@@ -86,7 +105,7 @@ class CreateVmViewModel(private val appState: AppState, private val scope: Corou
     }
 
     private fun seedDefault(rows: List<RomRow>) {
-        if (appState.createVmRomId.value != null) return
+        if (backup.state.value.pickedBackup != null || appState.createVmRomId.value != null) return
         // 可选 = 已解包，或原包在（创建前会自动解包）；占位包不算。
         val pick = rows.firstOrNull { it.isReady || (!it.placeholder && it.hasArchive) } ?: return
         appState.createVmRomId.value = pick.key
@@ -101,7 +120,7 @@ class CreateVmViewModel(private val appState: AppState, private val scope: Corou
             it.copy(
                 romId = key,
                 rowId = row?.rowId ?: rowId,
-                romSummary = row?.let { target ->
+                romSummary = if (backup.state.value.pickedBackup != null) "未选择" else row?.let { target ->
                     RomTexts.titleWithVersion(target) + " · " + RomTexts.sourceLabel(target.source)
                 }.orEmpty(),
             )
@@ -118,6 +137,10 @@ class CreateVmViewModel(private val appState: AppState, private val scope: Corou
 
     private fun create() {
         val snapshot = _state.value
+        backup.state.value.pickedBackup?.let {
+            backup.dispatch(BackupAction.Restore(it.id, snapshot.name))
+            return
+        }
         val romId = snapshot.romId
         if (romId == null) {
             _state.update { it.copy(error = "没有可用的 ROM") }
@@ -161,8 +184,9 @@ class CreateVmViewModel(private val appState: AppState, private val scope: Corou
 }
 
 @Composable
-fun rememberCreateVmViewModel(): CreateVmViewModel {
+internal fun rememberCreateVmViewModel(): CreateVmViewModel {
     val appState = LocalAppState.current
     val scope = androidx.compose.runtime.rememberCoroutineScope()
-    return remember(appState, scope) { CreateVmViewModel(appState, scope) }
+    val backup = LocalBackup.current
+    return remember(appState, scope, backup) { CreateVmViewModel(appState, scope, backup) }
 }

@@ -8,6 +8,8 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.util.Log
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.text.Normalizer
 import java.util.Locale
 import java.util.concurrent.locks.ReentrantLock
@@ -15,6 +17,7 @@ import kotlin.concurrent.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import me.kanadex.geometryos.backup.BackupVmSettings
 import org.json.JSONArray
 
 /**
@@ -181,12 +184,62 @@ class VmRegistry private constructor(context: Context) {
     fun create(romId: String, romPayload: String = "", romSource: String = ""): VmDevice = writeLock.withLock {
         ensureMigratedLocked()
         val items = list()
+        val device = allocateDevice(items, nextName(items), romId, romPayload, romSource)
+        ensureDirectories(device)
+        insert(device)
+        Log.i(TAG, "创建 ${device.name}（${device.id}，ROM $romId）→ ${device.root}")
+        bumpRevision()
+        device
+    }
+
+    internal fun commitRestored(
+        settings: BackupVmSettings,
+        stagingRoot: File,
+    ): VmDevice = writeLock.withLock {
+        ensureMigratedLocked()
+        val (name, nameKey) = requireNotNull(normalize(settings.name)) { "虚拟机名称无效" }
+        val items = list()
+        require(items.none { normalize(it.name)?.second == nameKey }) { "已有同名虚拟机，请更改名称" }
+        val rom = settings.rom
+        val device = allocateDevice(items, name, rom.key, rom.payloadSha256, rom.source)
+            .copy(displayMode = settings.displayMode)
+        val target = File(files, device.root).toPath()
+        val source = stagingRoot.toPath()
+        for (directory in listOf(source, source.resolve("vm"), source.resolve("native-window"))) {
+            require(Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) { "备份实例目录不完整" }
+        }
+        Files.createDirectories(target.parent)
+        // The destination is allocated under the registry lock and is published only after readback.
+        Files.move(source, target)
+        try {
+            val database = db()
+            database.transaction {
+                insert(device, nameKey)
+                database.query(TABLE, null, "id=?", arrayOf(device.id), null, null, null).use { cursor ->
+                    check(cursor.moveToFirst() && cursor.toDevice() == device) { "恢复设置读回不一致" }
+                }
+            }
+        } catch (failure: Exception) {
+            try { Files.move(target, source) } catch (rollbackFailure: Exception) {
+                failure.addSuppressed(rollbackFailure)
+            }
+            throw failure
+        }
+        bumpRevision()
+        device
+    }
+
+    private fun allocateDevice(
+        items: List<VmDevice>, name: String, romId: String, romPayload: String, romSource: String,
+    ): VmDevice {
         var stamp = System.currentTimeMillis()
-        while (items.any { it.id == stamp.toString() } || File(files, "$DIR_DEVICES/$stamp").exists()) stamp++
+        while (items.any { it.id == stamp.toString() } ||
+            Files.exists(File(files, "$DIR_DEVICES/$stamp").toPath(), LinkOption.NOFOLLOW_LINKS)
+        ) stamp++
         val id = stamp.toString()
-        val device = VmDevice(
+        return VmDevice(
             id = id,
-            name = nextName(items),
+            name = name,
             romId = romId,
             root = "$DIR_DEVICES/$id",
             runtimeDir = "$DIR_DEVICES/$id/vm",
@@ -194,11 +247,6 @@ class VmRegistry private constructor(context: Context) {
             romPayload = romPayload,
             romSource = romSource,
         )
-        ensureDirectories(device)
-        insert(device)
-        Log.i(TAG, "创建 ${device.name}（${device.id}，ROM $romId）→ ${device.root}")
-        bumpRevision()
-        device
     }
 
     fun delete(id: String): VmDevice? = writeLock.withLock {

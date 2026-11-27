@@ -14,7 +14,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  tests:
+    permissions:
+      contents: read
+      packages: read
+      checks: write
+    uses: ./.github/workflows/app-tests.yml
+
   release:
+    needs: tests
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:

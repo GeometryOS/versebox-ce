@@ -55,9 +55,9 @@ import top.yukonga.miuix.kmp.blur.layerBackdrop
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun RomDetailPage(rowId: String, mode: RomListMode, useBlur: Boolean) {
+fun RomDetailPage(rowId: String, mode: RomListMode, useBlur: Boolean, backupId: String? = null) {
     val navigator = LocalNavigator.current
-    val viewModel = rememberRomDetailViewModel(rowId, mode)
+    val viewModel = rememberRomDetailViewModel(rowId, mode, backupId)
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var menuExpanded by remember { mutableStateOf(false) }

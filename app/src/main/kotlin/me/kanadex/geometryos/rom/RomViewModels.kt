@@ -93,7 +93,7 @@ data class RomConfirm(
 
 sealed interface RomListAction {
     data object Refresh : RomListAction
-    data class Import(val uri: Uri) : RomListAction
+    data class Import(val uri: Uri, val onResult: ((Result<RomRepository.Outcome>) -> Unit)? = null) : RomListAction
     // 行内动作一律带 rowId，同 key 的内置行和本地行是两个对象
     data class RequestDelete(val rowId: String) : RomListAction
     data object DismissDelete : RomListAction
@@ -190,7 +190,7 @@ class RomListViewModel(
     fun dispatch(action: RomListAction) {
         when (action) {
             RomListAction.Refresh -> refresh()
-            is RomListAction.Import -> import(action.uri)
+            is RomListAction.Import -> import(action.uri, action.onResult)
             is RomListAction.RequestDelete -> {
                 val row = row(action.rowId) ?: return
                 _state.update {
@@ -352,8 +352,11 @@ class RomListViewModel(
     private fun groupsOf(rows: List<RomRow>, selectedRowId: String?): List<RomGroup> =
         RomGrouping.groups(rows, selectedRowId)
 
-    private fun import(uri: Uri) {
-        if (_state.value.busy) return
+    private fun import(uri: Uri, onResult: ((Result<RomRepository.Outcome>) -> Unit)?) {
+        if (_state.value.busy) {
+            onResult?.invoke(Result.failure(IllegalStateException("ROM 管理正在执行另一项操作")))
+            return
+        }
         _state.update { it.copy(busy = true, busyText = "正在读取 ROM 包…") }
         scope.launch {
             val result = withContext(Dispatchers.IO) {
@@ -377,6 +380,7 @@ class RomListViewModel(
             }
             refresh()
             appState.refreshRoms()
+            onResult?.invoke(result)
         }
     }
 

@@ -122,10 +122,14 @@ fun MiuixCreateVmPage(useBlur: Boolean) {
                 BasicComponent(
                     title = "ROM",
                     // 摘要由逻辑层拼好：`Android 15 V1.0.0 · 内置`（含版本号与来源）。
-                    summary = state.romSummary.ifBlank { "点击选择要安装的系统" },
+                    summary = state.romSummary.ifBlank { "未选择" },
                     onClick = { navigator.push(Route.RomList(pickForCreate = true)) },
                 )
             }
+        }
+        miuixSection("备份与恢复") {
+            BasicComponent(title = "从备份创建", summary = state.backupSummary,
+                onClick = { navigator.push(Route.BackupList(pick = true)) })
         }
         state.error?.let {
             item {
@@ -160,6 +164,7 @@ fun MiuixCreateVmPage(useBlur: Boolean) {
  */
 @Composable
 fun MiuixVmManagePage(id: String, useBlur: Boolean) {
+    val backup = me.kanadex.geometryos.backup.LocalBackup.current
     val navigator = LocalNavigator.current
     val context = LocalContext.current
     val appState = LocalAppState.current
@@ -350,6 +355,11 @@ fun MiuixVmManagePage(id: String, useBlur: Boolean) {
             )
         }
 
+        miuixSection("备份") {
+            BasicComponent(title = "备份虚拟机", onClick = {
+                backup.dispatch(me.kanadex.geometryos.backup.BackupAction.Capture(id))
+            })
+        }
         miuixSection("记录与删除") {
             BasicComponent(
                 title = "查看运行记录",

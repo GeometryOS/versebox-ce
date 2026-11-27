@@ -894,6 +894,24 @@ class RomRepository private constructor(context: Context) {
 
     // ------------------------------------------------------------------ 删除
 
+    internal fun openBackupArchive(ref: RomRef): java.io.InputStream = exclusive {
+        require(ref.payloadSha256.isNotEmpty()) { "当前虚拟机未绑定具备内容摘要的 ROM" }
+        val row = rowFor(ref) ?: throw RomException("找不到当前选择的 ROM：" + ref.key)
+        if (row.source == RomSource.Builtin) {
+            val builtin = builtinProperties().firstOrNull {
+                it.properties.key == row.key && it.properties.payloadSha256 == row.payloadSha256 && !it.properties.placeholder
+            } ?: throw RomException("当前内置 ROM 没有完整原包：" + row.key)
+            return@exclusive assets.open(RomStorage.ASSET_DIR + "/" + builtin.fileName)
+        }
+        val archive = sequenceOf(layout.archiveFor(row.key, row.payloadSha256), layout.archive(row.key))
+            .filter { it.isFile }
+            .firstOrNull {
+                val metadata = RomPackage.read(it)
+                !metadata.placeholder && metadata.key == row.key && metadata.payloadSha256 == row.payloadSha256
+            } ?: throw RomException("当前 ROM 原包不可用：" + row.key)
+        archive.inputStream()
+    }
+
     /** 删除本地 ROM（包 + 解包目录 + DB 行）。内置包只能清缓存，调这里会抛错。 */
     fun delete(rowId: String): RomRow = exclusive {
         deleteLocked(rowId)

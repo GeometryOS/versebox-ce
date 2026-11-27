@@ -74,6 +74,7 @@ fun MiuixHomePage(
     val navigator = LocalNavigator.current
     val uriHandler = LocalUriHandler.current
     val appState = LocalAppState.current
+    val backupState by me.kanadex.geometryos.backup.LocalBackup.current.state.collectAsStateWithLifecycle()
     val devices by appState.devices.collectAsStateWithLifecycle()
     val runtimes by appState.runtimes.collectAsStateWithLifecycle()
     val limit by appState.childLimit.collectAsStateWithLifecycle()
@@ -97,6 +98,11 @@ fun MiuixHomePage(
                 onVmsClick = onNavigateToVms,
                 limit = limit,
             )
+        }
+
+        miuixSection {
+            BasicComponent(title = "备份管理", summary = backupState.countLabel,
+                onClick = { navigator.push(Route.BackupList()) })
         }
 
         // 想恢复分类小标题：miuixSection("运行环境") { ... } —— 标题横向 28dp 与卡片文字自动对齐。

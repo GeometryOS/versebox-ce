@@ -6,4 +6,5 @@
     <cache-path name="export" path="export/" />
     <!-- 第一屏「分享日志快照」：只暴露 cache/snapshots 这一个目录（09/03 §3）。 -->
     <cache-path name="snapshots" path="snapshots/" />
+    <files-path name="vm-backups" path="backups/archives/" />
 </paths>

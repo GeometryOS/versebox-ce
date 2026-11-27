@@ -25,6 +25,11 @@ import io.a10vm.ui.boot.BootLauncher
 import io.a10vm.ui.boot.BootRestartBus
 import io.a10vm.ui.vm.openDesktop
 import io.a10vm.ui.verse.LocalAppState
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import me.kanadex.geometryos.backup.BackupAction
+import me.kanadex.geometryos.backup.BackupViewModel
+import me.kanadex.geometryos.backup.LocalBackup
 import io.a10vm.ui.page.main.settings.preferred.about.AboutPage
 import io.a10vm.ui.page.main.settings.preferred.about.OpenSourceLicensePage
 import io.a10vm.ui.page.main.settings.preferred.theme.ThemeSettingsPage
@@ -69,6 +74,27 @@ fun VerseBoxNavContainer(uiState: ThemeState, mainContent: @Composable () -> Uni
     val useBlur = uiState.useBlur
     val appState = LocalAppState.current
     val context = LocalContext.current
+
+    val backup = BackupViewModel.rememberViewModel()
+    val backupState by backup.state.collectAsStateWithLifecycle()
+    LaunchedEffect(backupState.createdBackup) {
+        if (backupState.createdBackup != null) {
+            backup.dispatch(BackupAction.ConsumeCaptured)
+            navigator.push(Route.BackupList())
+        }
+    }
+    LaunchedEffect(backupState.pendingRomUri) {
+        if (backupState.pendingRomUri != null && navigator.current() != Route.RomList(restoreImport = true)) {
+            navigator.push(Route.RomList(restoreImport = true))
+        }
+    }
+    LaunchedEffect(backupState.createdVmId) {
+        val id = backupState.createdVmId ?: return@LaunchedEffect
+        backup.dispatch(BackupAction.ConsumeCreated)
+        navigator.popUntil { it is Route.Main }
+        appState.requestVmTab()
+        navigator.push(Route.VmManage(id))
+    }
 
     // 第一屏的 C2 / C3 入口（09/04 §2 第 1 步）：先回到 Main 再 push ROM 列表，
     // 这样返回键回到主页，而不是停在半路某个二级页。
@@ -121,6 +147,7 @@ fun VerseBoxNavContainer(uiState: ThemeState, mainContent: @Composable () -> Uni
 
     CompositionLocalProvider(
         LocalNavigator provides navigator,
+        LocalBackup provides backup,
     ) {
         val navCornerRadius = rememberDeviceCornerRadius(defaultRadius = 0.dp)
         val roundAllCorners = uiState.predictiveBackAnimation == PredictiveBackAnimation.AOSP ||
@@ -215,6 +242,12 @@ fun VerseBoxNavContainer(uiState: ThemeState, mainContent: @Composable () -> Uni
                 }
             }
             // ROM 列表：管理（主页进来）与选择（新建页进来）是同一个页面的两种用途，保留侧滑返回。
+            entry<Route.BackupList>(swipeDismiss = swipeBackDirection) { key ->
+                VerseBoxNavEntry(interceptPredictiveBack, onBack) {
+                    if (uiState.useMiuix) me.kanadex.geometryos.backup.ui.miuix.MiuixBackupPage(useBlur, key.pick, key.detailId)
+                    else me.kanadex.geometryos.backup.ui.main.BackupPage(useBlur, key.pick, key.detailId)
+                }
+            }
             entry<Route.RomList>(swipeDismiss = swipeBackDirection) { key ->
                 VerseBoxNavEntry(interceptPredictiveBack, onBack) {
                     val mode = if (key.pickForCreate) {
@@ -223,9 +256,9 @@ fun VerseBoxNavContainer(uiState: ThemeState, mainContent: @Composable () -> Uni
                         me.kanadex.geometryos.rom.RomListMode.Manage
                     }
                     if (uiState.useMiuix) {
-                        io.a10vm.ui.page.miuix.vm.MiuixRomListPage(useBlur, mode)
+                        io.a10vm.ui.page.miuix.vm.MiuixRomListPage(useBlur, mode, key.restoreImport)
                     } else {
-                        io.a10vm.ui.page.main.vm.RomListPage(useBlur, mode)
+                        io.a10vm.ui.page.main.vm.RomListPage(useBlur, mode, key.restoreImport)
                     }
                 }
             }
@@ -237,9 +270,9 @@ fun VerseBoxNavContainer(uiState: ThemeState, mainContent: @Composable () -> Uni
                         me.kanadex.geometryos.rom.RomListMode.Manage
                     }
                     if (uiState.useMiuix) {
-                        io.a10vm.ui.page.miuix.vm.MiuixRomDetailPage(key.rowId, mode, useBlur)
+                        io.a10vm.ui.page.miuix.vm.MiuixRomDetailPage(key.rowId, mode, useBlur, key.backupId)
                     } else {
-                        io.a10vm.ui.page.main.vm.RomDetailPage(key.rowId, mode, useBlur)
+                        io.a10vm.ui.page.main.vm.RomDetailPage(key.rowId, mode, useBlur, key.backupId)
                     }
                 }
             }
@@ -272,6 +305,21 @@ fun VerseBoxNavContainer(uiState: ThemeState, mainContent: @Composable () -> Uni
         // 子进程限制提示：宿主放在导航层（Route.Main 与所有二级页之上），
         // 所以启动时的自动检测命中异常时，不管当前在哪个 tab 都能弹出来。
         ProcessLimitAlertHost(useMiuix = uiState.useMiuix)
+        if (uiState.useMiuix) {
+            io.a10vm.ui.page.miuix.widgets.MiuixBlockingLoadingDialog(
+                visible = backupState.working, text = backupState.progressText,
+            )
+        } else {
+            io.a10vm.ui.page.main.widget.setting.BlockingLoadingIndicator(
+                visible = backupState.working, text = backupState.progressText, backdrop = null,
+            )
+        }
+        LaunchedEffect(backupState.error, backupState.message) {
+            val text = backupState.error ?: backupState.message ?: return@LaunchedEffect
+            android.widget.Toast.makeText(context, text, android.widget.Toast.LENGTH_LONG).show()
+            backup.dispatch(BackupAction.DismissError)
+            backup.dispatch(BackupAction.ConsumeMessage)
+        }
 
     }
 }

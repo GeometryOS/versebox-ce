@@ -42,6 +42,9 @@ sealed interface Route : NavKey {
     @Serializable
     data object CreateVm : Route
 
+    @Serializable
+    data class BackupList(val pick: Boolean = false, val detailId: String? = null) : Route
+
     /**
      * ROM 列表（唯一的 ROM 页面，两种用途共用一套版式与一个 ViewModel）。
      *
@@ -50,10 +53,10 @@ sealed interface Route : NavKey {
      *   （`docs/rom-package/14-版本管理/` §6：选择 ROM 只有这一页）。
      */
     @Serializable
-    data class RomList(val pickForCreate: Boolean = false) : Route
+    data class RomList(val pickForCreate: Boolean = false, val restoreImport: Boolean = false) : Route
 
     @Serializable
-    data class RomDetail(val rowId: String, val pickForCreate: Boolean = false) : Route
+    data class RomDetail(val rowId: String, val pickForCreate: Boolean = false, val backupId: String? = null) : Route
 
     @Serializable
     data class VmManage(val id: String) : Route
