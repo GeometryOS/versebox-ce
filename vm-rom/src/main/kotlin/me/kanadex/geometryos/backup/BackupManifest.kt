@@ -137,7 +137,8 @@ internal object BackupManifestYaml {
         }
         val result = BackupManifest(
             id = id,
-            createdAtMillis = number("createdAtMillis"),
+            // Schema 1 archives may predate this field. Zero represents an unknown time.
+            createdAtMillis = fields.remove("createdAtMillis")?.toLong() ?: 0L,
             settings = BackupVmSettings(
                 take("name"), take("displayMode"),
                 BackupRomSelection(take("romId"), take("romVersion"), take("romPayloadSha256"),

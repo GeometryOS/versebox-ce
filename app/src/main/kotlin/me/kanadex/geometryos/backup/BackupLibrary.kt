@@ -21,7 +21,9 @@ import me.kanadex.geometryos.rom.RomTexts
  */
 internal class BackupLibrary(context: Context) {
     data class Row(val id: UUID, val name: String, val romName: String, val bytes: Long,
-        val romBytes: Long?, val createdAt: Long) {
+        val romBytes: Long?, val createdAt: Long, val romId: String) {
+        fun summary(zone: java.time.ZoneId): String = romName.ifBlank { romId } + "(" +
+            me.kanadex.geometryos.shared.BackupDateGrouping.format(createdAt, zone).ifEmpty { "未知" } + "/" + romId + ")"
         val sizeLabel get() = me.kanadex.geometryos.rom.RomTexts.bytes(bytes) +
             (romBytes?.let { " / 含 ROM " + me.kanadex.geometryos.rom.RomTexts.bytes(it) } ?: "")
     }
@@ -32,7 +34,7 @@ internal class BackupLibrary(context: Context) {
     private val lock = Any()
     private val changes = MutableStateFlow(0L)
     val revision = changes.asStateFlow()
-    private val database = object : SQLiteOpenHelper(app, "vm-backups.db", null, 1) {
+    private val database = object : SQLiteOpenHelper(app, "vm-backups.db", null, 2) {
         override fun onCreate(db: SQLiteDatabase) {
             db.execSQL("""
                 CREATE TABLE backup (
@@ -41,13 +43,14 @@ internal class BackupLibrary(context: Context) {
                     rom_name TEXT NOT NULL,
                     bytes INTEGER NOT NULL,
                     rom_bytes INTEGER,
-                    created_at INTEGER NOT NULL
+                    created_at INTEGER NOT NULL,
+                    rom_id TEXT NOT NULL
                 )
             """.trimIndent())
         }
 
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-            error("Unsupported backup library migration: $oldVersion to $newVersion")
+            if (oldVersion < 2) db.execSQL("ALTER TABLE backup ADD COLUMN rom_id TEXT NOT NULL DEFAULT ''")
         }
     }
 
@@ -56,7 +59,10 @@ internal class BackupLibrary(context: Context) {
             buildList {
                 while (cursor.moveToNext()) {
                     add(Row(UUID.fromString(cursor.getString(0)), cursor.getString(1), cursor.getString(2),
-                        cursor.getLong(3), if (cursor.isNull(4)) null else cursor.getLong(4), cursor.getLong(5)))
+                        cursor.getLong(3), if (cursor.isNull(4)) null else cursor.getLong(4), cursor.getLong(5), cursor.getString(6).ifEmpty {
+                            val id = UUID.fromString(cursor.getString(0))
+                            runCatching { BackupArchive.readHeader(archive(id)).settings.rom.id }.getOrDefault("未知")
+                        }))
                 }
             }
         }
@@ -89,6 +95,7 @@ internal class BackupLibrary(context: Context) {
                 put("bytes", finalFile.length())
                 put("rom_bytes", metadata.romArchive?.bytes)
                 put("created_at", metadata.createdAtMillis)
+                put("rom_id", metadata.settings.rom.id)
             })
         } catch (failure: Exception) {
             try { Files.move(finalFile.toPath(), staged.toPath()) } catch (cleanup: Exception) {
@@ -143,19 +150,20 @@ internal class BackupLibrary(context: Context) {
         }
     }
 
-    fun readEmbeddedRom(id: UUID, checkActive: () -> Unit): me.kanadex.geometryos.rom.RomProperties {
-        val work = newWorkspace()
-        try {
-            val rom = work.resolve("preview.zip")
-            val manifest = BackupArchive.extractRom(archive(id), rom, checkActive = checkActive)
-            val properties = me.kanadex.geometryos.rom.RomPackage.read(rom)
+    data class EmbeddedRom(
+        val properties: me.kanadex.geometryos.rom.RomProperties,
+        /** 归档内 ROM 条目的实测字节数，展示与占用都以它为准。 */
+        val bytes: Long,
+    )
+
+    fun readEmbeddedRom(id: UUID, checkActive: () -> Unit): EmbeddedRom =
+        BackupArchive.readEmbeddedRomMetadata(archive(id)) { manifest, bytes, input ->
+            require(bytes > 0L) { "备份内 ROM 为空" }
+            val properties = me.kanadex.geometryos.rom.RomPackage.readMetadata(input, checkActive)
             require(properties.key == manifest.settings.rom.key &&
                 properties.payloadSha256 == manifest.settings.rom.payloadSha256) { "备份 ROM 与所选版本不一致" }
-            return properties
-        } finally {
-            work.deleteRecursively()
+            EmbeddedRom(properties, bytes)
         }
-    }
 
     fun export(id: UUID, uri: Uri) = synchronized(lock) {
         archive(id).inputStream().buffered().use { input ->

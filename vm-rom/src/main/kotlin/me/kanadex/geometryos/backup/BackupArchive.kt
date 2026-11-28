@@ -19,6 +19,7 @@ import java.nio.file.attribute.PosixFilePermission
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.UUID
+import java.util.zip.Deflater
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
@@ -35,8 +36,15 @@ import me.kanadex.geometryos.rom.toHex
  * they are listed as omissions instead of failing the capture.
  */
 object BackupArchive {
-    enum class Phase { Write, Verify, Restore, ReadRom }
-    data class Progress(val phase: Phase, val files: Int, val totalFiles: Int, val bytes: Long)
+    enum class Phase { Write, WriteRom, Verify, Restore, ReadRom }
+    // totalBytes 只在已知总量的阶段（ROM 原包）填入，其余阶段为 0。
+    data class Progress(
+        val phase: Phase,
+        val files: Int,
+        val totalFiles: Int,
+        val bytes: Long,
+        val totalBytes: Long = 0L,
+    )
 
     // 条目被省略的原因与条数，供记录与审计展示；省略不等于失败
     data class Omissions(val runtimeEntries: Int, val derivedLinks: Int, val literalLinks: Int)
@@ -114,13 +122,22 @@ object BackupArchive {
                         progress(Progress(Phase.Write, index + 1, total, bytes))
                         updated
                     } + scanned.omitted
+                    // ROM 原包本身已是压缩过的 zip，再 DEFLATE 一遍只烧 CPU；按存储方式写入并单独报阶段。
                     val rom = originalRom?.let { romFile ->
-                        zip.put(BackupManifestYaml.ROM) {
-                            romFile.inputStream().use { input ->
-                                transfer(input, zip, romFile.length(), checkActive) {
-                                    progress(Progress(Phase.Write, nodes.size, nodes.size, bytes + it))
+                        val size = romFile.length()
+                        zip.setLevel(Deflater.NO_COMPRESSION)
+                        try {
+                            zip.putNextEntry(ZipEntry(BackupManifestYaml.ROM))
+                            val blob = romFile.inputStream().use { input ->
+                                transfer(input, zip, size, checkActive) { count ->
+                                    progress(Progress(Phase.WriteRom, 0, 1, count, size))
                                 }
                             }
+                            zip.closeEntry()
+                            progress(Progress(Phase.WriteRom, 1, 1, blob.bytes, size))
+                            blob
+                        } finally {
+                            zip.setLevel(Deflater.DEFAULT_COMPRESSION)
                         }
                     }
                     val inventory = encodeInventory(nodes)
@@ -141,6 +158,27 @@ object BackupArchive {
 
     fun readManifest(archive: File): BackupManifest = ZipFile(archive).use { zip -> index(zip).manifest }
 
+    fun readHeader(archive: File): BackupManifest = ZipFile(archive).use(::readHeader)
+
+    private fun readHeader(zip: ZipFile): BackupManifest {
+        val entry = requireNotNull(zip.getEntry(BackupManifestYaml.HEADER)) { "Missing backup header" }
+        require(entry.size in 0..BackupManifestYaml.MAX_BYTES.toLong()) { "Oversized backup header" }
+        return BackupManifestYaml.decode(ByteArrayOutputStream().also { output ->
+            zip.getInputStream(entry).use { transfer(it, output, entry.size, {}, {}) }
+        }.toByteArray())
+    }
+
+    // The third argument is the measured ZIP entry size. Display and callers use it rather than
+    // trusting a declared byte count.
+    fun <T> readEmbeddedRomMetadata(archive: File, read: (BackupManifest, Long, InputStream) -> T): T =
+        ZipFile(archive).use { zip ->
+            val manifest = readHeader(zip)
+            val blob = requireNotNull(manifest.romArchive) { "Backup has no ROM package" }
+            val entry = requireNotNull(zip.getEntry(BackupManifestYaml.ROM)) { "Missing ROM package" }
+            require(blob.bytes == 0L || entry.size == blob.bytes) { "ROM package size differs" }
+            zip.getInputStream(entry).buffered().use { read(manifest, entry.size, it) }
+        }
+
     fun verify(
         archive: File,
         progress: (Progress) -> Unit = {},
@@ -152,9 +190,9 @@ object BackupArchive {
         copyTree(zip, index, null, progress, checkActive)
         index.manifest.romArchive?.let { blob ->
             copyChecked(zip, index, BackupManifestYaml.ROM, blob, null, checkActive) {
-                progress(Progress(Phase.ReadRom, 0, 1, it))
+                progress(Progress(Phase.ReadRom, 0, 1, it, blob.bytes))
             }
-            progress(Progress(Phase.ReadRom, 1, 1, blob.bytes))
+            progress(Progress(Phase.ReadRom, 1, 1, blob.bytes, blob.bytes))
         }
         index.manifest
     }
@@ -172,10 +210,10 @@ object BackupArchive {
         try {
             output.use {
                 copyChecked(zip, index, BackupManifestYaml.ROM, blob, it, checkActive) { count ->
-                    progress(Progress(Phase.ReadRom, 0, 1, count))
+                    progress(Progress(Phase.ReadRom, 0, 1, count, blob.bytes))
                 }
             }
-            progress(Progress(Phase.ReadRom, 1, 1, blob.bytes))
+            progress(Progress(Phase.ReadRom, 1, 1, blob.bytes, blob.bytes))
             index.manifest
         } catch (failure: Throwable) {
             cleanup(failure) { Files.deleteIfExists(path) }

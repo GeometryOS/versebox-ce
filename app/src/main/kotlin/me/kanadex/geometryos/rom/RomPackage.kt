@@ -64,22 +64,25 @@ object RomPackage {
      */
     fun readFromAsset(assets: AssetManager, assetName: String): RomProperties {
         try {
-            assets.open(assetName).use { input ->
-                ZipInputStream(input.buffered()).use { zip ->
-                    while (true) {
-                        val entry = zip.nextEntry ?: break
-                        if (entry.name == RomStorage.PROPERTIES) {
-                            val bytes = zip.readLimited(64 * 1024)
-                            return validate(parseYaml(bytes.toString(Charsets.UTF_8)))
-                        }
-                        zip.closeEntry()
-                    }
-                }
-            }
+            return assets.open(assetName).use { readMetadata(it) }
         } catch (failure: RomException) {
             throw failure
         } catch (failure: Exception) {
             throw RomException("读取内置 ROM 自述失败：" + assetName, failure)
+        }
+    }
+
+    internal fun readMetadata(input: java.io.InputStream, checkActive: () -> Unit = {}): RomProperties {
+        ZipInputStream(input.buffered()).use { zip ->
+            while (true) {
+                checkActive()
+                val entry = zip.nextEntry ?: break
+                if (entry.name == RomStorage.PROPERTIES) {
+                    return RomPropertiesYaml.read(zip.readLimited(64 * 1024).toString(Charsets.UTF_8))
+                }
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                while (zip.read(buffer) != -1) checkActive()
+            }
         }
         throw RomException("不是 VerseBox ROM 包：缺少 " + RomStorage.PROPERTIES)
     }

@@ -35,7 +35,12 @@ class BackupArchiveTest {
         val source = vmTree()
         val rom = temp.newFile("original.zip").apply { writeBytes(byteArrayOf(1, 2, 3)) }
         val archive = File(temp.root, "backup.zip")
-        val manifest = BackupArchive.write(archive, source, settings, client, rom)
+        val seen = mutableListOf<BackupArchive.Progress>()
+        val manifest = BackupArchive.write(archive, source, settings, client, rom, progress = { seen += it })
+        val romWrites = seen.filter { it.phase == BackupArchive.Phase.WriteRom }
+        assertTrue(romWrites.isNotEmpty())
+        assertEquals(rom.length(), romWrites.last().bytes)
+        assertEquals(rom.length(), romWrites.last().totalBytes)
         assertEquals(settings, manifest.settings)
         assertEquals(client, manifest.client)
         assertEquals(BackupArchive.readManifest(archive), manifest)
@@ -43,6 +48,9 @@ class BackupArchiveTest {
         val extractedRom = File(temp.root, "import.zip")
         BackupArchive.extractRom(archive, extractedRom)
         assertArrayEquals(rom.readBytes(), extractedRom.readBytes())
+        val measured = BackupArchive.readEmbeddedRomMetadata(archive) { _, bytes, input -> bytes to input.readBytes().size }
+        assertEquals(rom.length(), measured.first)
+        assertEquals(rom.length().toInt(), measured.second)
         repeat(2) { index ->
             val root = File(temp.root, "restore-$index")
             assertEquals(manifest, BackupArchive.restoreTree(archive, root))
@@ -51,6 +59,24 @@ class BackupArchiveTest {
             assertNotEquals(source.canonicalPath, root.canonicalPath)
         }
         assertEquals("keep guest data", source.resolve(sentinel).readText())
+    }
+
+    @Test fun verifiesAndRestoresLegacyArchivesWithoutCreationTime() {
+        val modern = File(temp.root, "dated.zip")
+        val written = BackupArchive.write(modern, vmTree(), settings, client, null)
+        assertTrue(written.createdAtMillis > 0L)
+        assertEquals(written.createdAtMillis, BackupArchive.readManifest(modern).createdAtMillis)
+        val legacy = File(temp.root, "undated.zip")
+        rewrite(modern, legacy, "backup.yaml") { bytes ->
+            bytes.toString(Charsets.UTF_8).lineSequence()
+                .filterNot { it.startsWith("createdAtMillis:") }
+                .joinToString("\n").toByteArray(Charsets.UTF_8)
+        }
+        val manifest = BackupArchive.verify(legacy)
+        assertEquals(0L, manifest.createdAtMillis)
+        val restored = File(temp.root, "legacy-restored")
+        assertEquals(manifest, BackupArchive.restoreTree(legacy, restored))
+        assertEquals("keep guest data", restored.resolve(sentinel).readText())
     }
 
     @Test fun omittingRomPreservesExactSelectionAndDoesNotCreateAnImportFile() {
