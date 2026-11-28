@@ -11,7 +11,6 @@ import io.a10vm.core.ApplicationSingleton
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.LinkOption
-import java.text.Normalizer
 import java.util.Locale
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -19,6 +18,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import me.kanadex.geometryos.backup.BackupVmSettings
+import me.kanadex.geometryos.shared.VmInstanceNamePolicy
 import org.json.JSONArray
 
 /**
@@ -75,16 +75,7 @@ class VmRegistry private constructor(context: Context) {
          *
          * @return null 表示这个名字不可用（空、全是空白、超长）。
          */
-        fun normalize(raw: String): Pair<String, String>? {
-            val cleaned = buildString {
-                for (ch in raw) if (ch.code > 0x1F && ch.code != 0x7F) append(ch)
-            }
-            val display = cleaned.trim().replace(Regex("[\\s\\u00A0\\u3000]+"), " ")
-            if (display.isEmpty()) return null
-            if (display.codePointCount(0, display.length) > MAX_NAME_LENGTH) return null
-            val key = Normalizer.normalize(display, Normalizer.Form.NFC).lowercase(Locale.ROOT)
-            return display to key
-        }
+        fun normalize(raw: String): Pair<String, String>? = VmInstanceNamePolicy.normalize(raw, MAX_NAME_LENGTH)
     }
 
     private val context = context.applicationContext
@@ -179,12 +170,24 @@ class VmRegistry private constructor(context: Context) {
      * （用户选的就是某一行），所以**创建时就写全**：只写 romKey 的话，同版本两份内容从第一刻起
      * 就分不开，后面每次启动都要靠"猜"（`docs/rom-package/14-版本管理/04` R3）。
      */
-    fun create(romId: String, romPayload: String = "", romSource: String = ""): VmDevice = writeLock.withLock {
+    fun create(
+        romId: String,
+        romPayload: String = "",
+        romSource: String = "",
+        romName: String = me.kanadex.geometryos.rom.RomKeys.idOf(romId),
+        requestedName: String = "",
+        onNameCorrected: (String) -> Unit = {},
+    ): VmDevice = writeLock.withLock {
         ensureMigratedLocked()
         val items = list()
-        val device = allocateDevice(items, nextName(items), romId, romPayload, romSource)
+        val requested = requestedName.ifBlank { VmInstanceNamePolicy.defaultName(romName, MAX_NAME_LENGTH) }
+        val name = requireNotNull(VmInstanceNamePolicy.correct(requested, items.map { it.name }, MAX_NAME_LENGTH)) {
+            "虚拟机名称无效"
+        }
+        val device = allocateDevice(items, name.value, romId, romPayload, romSource)
         ensureDirectories(device)
-        insert(device)
+        insert(device, name.key)
+        name.event?.let(onNameCorrected)
         Log.i(TAG, "创建 ${device.name}（${device.id}，ROM $romId）→ ${device.root}")
         bumpRevision()
         device
@@ -193,11 +196,13 @@ class VmRegistry private constructor(context: Context) {
     internal fun commitRestored(
         settings: BackupVmSettings,
         stagingRoot: File,
+        onNameCorrected: (String) -> Unit = {},
     ): VmDevice = writeLock.withLock {
         ensureMigratedLocked()
-        val (name, nameKey) = requireNotNull(normalize(settings.name)) { "虚拟机名称无效" }
         val items = list()
-        require(items.none { normalize(it.name)?.second == nameKey }) { "已有同名虚拟机，请更改名称" }
+        val (name, nameKey, correction) = requireNotNull(
+            VmInstanceNamePolicy.correct(settings.name, items.map { it.name }, MAX_NAME_LENGTH),
+        ) { "虚拟机名称无效" }
         val rom = settings.rom
         val device = allocateDevice(items, name, rom.key, rom.payloadSha256, rom.source)
             .copy(displayMode = settings.displayMode)
@@ -223,6 +228,7 @@ class VmRegistry private constructor(context: Context) {
             }
             throw failure
         }
+        correction?.let(onNameCorrected)
         bumpRevision()
         device
     }
@@ -262,8 +268,12 @@ class VmRegistry private constructor(context: Context) {
      */
     fun rename(id: String, rawName: String): RenameResult = writeLock.withLock {
         ensureMigratedLocked()
-        val (display, key) = normalize(rawName)
+        val items = list()
+        if (items.none { it.id == id }) return@withLock RenameResult.NotFound
+        val candidates = items.filter { it.id != id }
+        val decision = VmInstanceNamePolicy.correct(rawName, candidates.map { it.name }, MAX_NAME_LENGTH)
             ?: return@withLock if (rawName.isBlank()) RenameResult.EmptyName else RenameResult.TooLong
+        val (display, key) = decision.value to decision.key
         val database = db()
         database.beginTransaction()
         try {
@@ -297,7 +307,8 @@ class VmRegistry private constructor(context: Context) {
             val device = find(id) ?: return@withLock RenameResult.VerifyFailed
             Log.i(TAG, "VMRENAME id=$id rows=$rows name=$display")
             bumpRevision()
-            RenameResult.Renamed(device)
+            decision.event?.let { Log.i(TAG, it) }
+            RenameResult.Renamed(device, decision.event)
         } catch (conflict: SQLiteConstraintException) {
             database.endTransaction()
             Log.i(TAG, "VMRENAME 重名被拒绝 id=$id name=$display")
@@ -610,10 +621,5 @@ class VmRegistry private constructor(context: Context) {
         return devices
     }
 
-    private fun nextName(items: List<VmDevice>): String {
-        val used = items.map { normalize(it.name)?.second ?: it.name.lowercase(Locale.ROOT) }.toSet()
-        var number = 1
-        while (("虚拟机 $number").lowercase(Locale.ROOT) in used) number++
-        return "虚拟机 $number"
-    }
+
 }

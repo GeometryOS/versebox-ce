@@ -79,9 +79,7 @@ class VmDevices(context: Context) {
 
     fun ensure(device: VmDevice) = registry.ensureDirectories(device)
 
-    /** 新建实例；[romPayload] / [romSource] 是「用的是哪一份 ROM」的身份（见 [VmDevice]）。 */
-    fun create(romId: String, romPayload: String = "", romSource: String = ""): VmDevice =
-        registry.create(romId, romPayload, romSource)
+    // 创建只能经 AppState.create 与统一新建页，门面不再提供第二条入口。
 
     fun delete(id: String): VmDevice? = registry.delete(id)
 

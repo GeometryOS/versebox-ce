@@ -45,9 +45,7 @@ import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.window.WindowDialog
 
 /**
  * 备份列表、选择与详情（Miuix 分支）。
@@ -63,8 +61,6 @@ internal fun MiuixBackupPage(useBlur: Boolean, pick: Boolean, detailId: String? 
     val state by viewModel.state.collectAsStateWithLifecycle()
     var deleteId by remember { mutableStateOf<UUID?>(null) }
     var exportId by remember { mutableStateOf<UUID?>(null) }
-    var restoreId by remember { mutableStateOf<UUID?>(null) }
-    var restoreName by remember { mutableStateOf("") }
     val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
         viewModel.dispatch(BackupAction.Import(it))
     }
@@ -96,11 +92,15 @@ internal fun MiuixBackupPage(useBlur: Boolean, pick: Boolean, detailId: String? 
         },
     ) {
         if (detailId == null) {
-            if (state.isLoading) {
+            if (state.isLoading && state.rows.isEmpty()) {
                 item(key = "loading") {
                     MiuixPageLoading("正在读取备份…", Modifier.fillParentMaxSize())
                 }
-            } else if (state.rows.isEmpty()) {
+            } else if (state.error != null && state.rows.isEmpty()) {
+                miuixSection("备份") {
+                    BasicComponent(title = "无法读取备份", summary = state.error.orEmpty())
+                }
+            } else if (state.isEmpty) {
                 miuixSection {
                     BasicComponent(
                         title = if (pick) "没有可选择的备份" else "还没有备份",
@@ -112,36 +112,41 @@ internal fun MiuixBackupPage(useBlur: Boolean, pick: Boolean, detailId: String? 
                     )
                 }
             } else {
-                item(key = "count") { SmallTitle(text = state.countLabel ?: "备份") }
-                items(state.rows, key = { it.id.toString() }) { row ->
-                    MiuixBackupCard(
-                        modifier = Modifier.animateItem(),
-                        row = row,
-                        pickMode = pick,
-                        onOpen = { navigator.push(Route.BackupList(pick, row.id.toString())) },
-                        onDelete = { deleteId = row.id },
-                        onExport = {
-                            exportId = row.id
-                            exporter.launch(row.name + ".zip")
-                        },
-                        onShare = { viewModel.dispatch(BackupAction.Share(row.id)) },
-                        onPrimary = {
-                            if (pick) {
-                                viewModel.dispatch(BackupAction.Pick(row))
-                                navigator.pop()
-                            } else {
-                                restoreId = row.id
-                                restoreName = row.name
-                            }
-                        },
-                    )
+                state.groups.forEach { (group, rows) ->
+                    item(key = "group-" + group.name) {
+                        SmallTitle(text = group.title, modifier = Modifier.animateItem())
+                    }
+                    items(rows, key = { it.id.toString() }) { row ->
+                        MiuixBackupCard(
+                            modifier = Modifier.animateItem(),
+                            row = row,
+                            pickMode = pick,
+                            selected = pick && state.pickedBackup?.id == row.id,
+                            summary = state.summaries.getValue(row.id),
+                            onOpen = { navigator.push(Route.BackupList(pick, row.id.toString())) },
+                            onDelete = { deleteId = row.id },
+                            onExport = {
+                                exportId = row.id
+                                exporter.launch(row.name + ".zip")
+                            },
+                            onShare = { viewModel.dispatch(BackupAction.Share(row.id)) },
+                            onPrimary = {
+                                if (pick) {
+                                    viewModel.dispatch(BackupAction.Pick(row))
+                                    navigator.pop()
+                                } else {
+                                    viewModel.createRoute(row.id)?.let { navigator.push(it) }
+                                }
+                            },
+                        )
+                    }
                 }
             }
         } else {
             val row = state.rows.firstOrNull { it.id.toString() == detailId }
             val manifest = state.detail?.takeIf { it.id.toString() == detailId }
             if (manifest == null) {
-                if (state.isLoadingDetail) {
+                if (state.isLoadingDetail || state.selected?.toString() != detailId) {
                     item(key = "detail-loading") {
                         MiuixPageLoading("正在读取备份详情…", Modifier.fillParentMaxSize())
                     }
@@ -158,16 +163,19 @@ internal fun MiuixBackupPage(useBlur: Boolean, pick: Boolean, detailId: String? 
                         summary = manifest.settings.displayMode.ifBlank { "跟随设备" },
                     )
                     BasicComponent(title = "备份大小", summary = row?.sizeLabel.orEmpty())
+                    BasicComponent(title = "备份创建日期", summary = state.detailDate)
                 }
                 miuixSection("ROM") {
-                    BasicComponent(
-                        title = manifest.settings.rom.name,
-                        summary = manifest.settings.rom.key,
-                    )
+                    if (manifest.romArchive != null && state.detailRomBytes > 0L) {
+                        BasicComponent(
+                            title = "ROM 包大小",
+                            summary = me.kanadex.geometryos.rom.RomTexts.bytes(state.detailRomBytes),
+                        )
+                    }
                     if (manifest.romArchive != null) {
                         BasicComponent(
                             title = "ROM 详情",
-                            summary = "查看这个备份携带的 ROM",
+                            summary = state.detailRomTitle ?: "无法读取 ROM 信息",
                             onClick = { navigator.push(Route.RomDetail("", backupId = manifest.id.toString())) },
                         )
                     } else {
@@ -195,15 +203,6 @@ internal fun MiuixBackupPage(useBlur: Boolean, pick: Boolean, detailId: String? 
             onDismissRequest = { deleteId = null },
         )
     }
-    restoreId?.let { id ->
-        WindowDialog(show = true, title = "恢复虚拟机", onDismissRequest = { restoreId = null }) {
-            TextField(value = restoreName, onValueChange = { restoreName = it }, label = "名称", singleLine = true)
-            TextButton(text = "恢复", onClick = {
-                restoreId = null
-                viewModel.dispatch(BackupAction.Restore(id, restoreName))
-            })
-        }
-    }
 }
 
 /** 一行备份，组件与间距和 [io.a10vm.ui.page.miuix.vm.MiuixRomCard] 一致。 */
@@ -212,6 +211,8 @@ private fun MiuixBackupCard(
     modifier: Modifier = Modifier,
     row: BackupLibrary.Row,
     pickMode: Boolean,
+    selected: Boolean,
+    summary: String,
     onOpen: () -> Unit,
     onDelete: () -> Unit,
     onExport: () -> Unit,
@@ -227,22 +228,30 @@ private fun MiuixBackupCard(
             modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 12.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text(
-                text = row.name,
-                style = MiuixTheme.textStyles.title4,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (row.romName.isNotBlank()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Text(
-                    text = row.romName,
+                    text = row.name,
+                    style = MiuixTheme.textStyles.title4,
+                    fontWeight = FontWeight.Medium,
+                    color = if (selected) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (selected) {
+                    Icon(io.a10vm.ui.icons.AppMiuixIcons.Ok, contentDescription = "已选中", tint = MiuixTheme.colorScheme.primary)
+                }
+            }
+            Text(
+                    text = summary,
                     style = MiuixTheme.textStyles.body2,
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+                overflow = TextOverflow.Ellipsis,
+            )
             Text(
                 text = row.sizeLabel,
                 style = MiuixTheme.textStyles.footnote2,
@@ -286,7 +295,10 @@ private fun MiuixBackupCard(
             }
             Spacer(modifier = Modifier.weight(1f))
             TextButton(
-                text = if (pickMode) "选择" else "恢复",
+                text = if (pickMode) {
+                    if (selected) me.kanadex.geometryos.rom.RomTexts.PICKED_ACTION else me.kanadex.geometryos.rom.RomTexts.PICK_ACTION
+                } else "恢复",
+                enabled = !selected,
                 onClick = onPrimary,
                 colors = ButtonDefaults.textButtonColorsPrimary(),
             )

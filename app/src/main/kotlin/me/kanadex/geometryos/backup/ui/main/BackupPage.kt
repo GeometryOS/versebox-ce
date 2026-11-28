@@ -23,7 +23,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -72,8 +71,6 @@ internal fun BackupPage(useBlur: Boolean, pick: Boolean, detailId: String? = nul
     val state by viewModel.state.collectAsStateWithLifecycle()
     var deleteId by remember { mutableStateOf<UUID?>(null) }
     var exportId by remember { mutableStateOf<UUID?>(null) }
-    var restoreId by remember { mutableStateOf<UUID?>(null) }
-    var restoreName by remember { mutableStateOf("") }
     val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
         viewModel.dispatch(BackupAction.Import(it))
     }
@@ -133,11 +130,19 @@ internal fun BackupPage(useBlur: Boolean, pick: Boolean, detailId: String? = nul
             ),
         ) {
             if (detailId == null) {
-                if (state.isLoading) {
+                if (state.isLoading && state.rows.isEmpty()) {
                     item(key = "loading") {
                         PageLoadingIndicator("正在读取备份…", Modifier.fillParentMaxSize())
                     }
-                } else if (state.rows.isEmpty()) {
+                } else if (state.error != null && state.rows.isEmpty()) {
+                    item(key = "failure") {
+                        SegmentedColumn(title = "备份") {
+                            item(key = "failure-row") {
+                                BaseWidget(title = "无法读取备份", description = state.error.orEmpty())
+                            }
+                        }
+                    }
+                } else if (state.isEmpty) {
                     item(key = "empty") {
                         SegmentedColumn(title = "备份") {
                             item(key = "empty-row") {
@@ -155,30 +160,33 @@ internal fun BackupPage(useBlur: Boolean, pick: Boolean, detailId: String? = nul
                         }
                     }
                 } else {
-                    item(key = "rows") {
-                        SegmentedColumn(modifier = Modifier.animateItem(), title = state.countLabel ?: "备份") {
-                            state.rows.forEach { row ->
-                                item(key = row.id.toString()) {
-                                    BackupRow(
-                                        row = row,
-                                        pickMode = pick,
-                                        onOpen = { navigator.push(Route.BackupList(pick, row.id.toString())) },
-                                        onDelete = { deleteId = row.id },
-                                        onExport = {
-                                            exportId = row.id
-                                            exporter.launch(row.name + ".zip")
-                                        },
-                                        onShare = { viewModel.dispatch(BackupAction.Share(row.id)) },
-                                        onPrimary = {
-                                            if (pick) {
-                                                viewModel.dispatch(BackupAction.Pick(row))
-                                                navigator.pop()
-                                            } else {
-                                                restoreId = row.id
-                                                restoreName = row.name
-                                            }
-                                        },
-                                    )
+                    state.groups.forEach { (group, rows) ->
+                        item(key = "group-" + group.name) {
+                            SegmentedColumn(modifier = Modifier.animateItem(), title = group.title) {
+                                rows.forEach { row ->
+                                    item(key = row.id.toString()) {
+                                        BackupRow(
+                                            row = row,
+                                            pickMode = pick,
+                                            selected = pick && state.pickedBackup?.id == row.id,
+                                            summary = state.summaries.getValue(row.id),
+                                            onOpen = { navigator.push(Route.BackupList(pick, row.id.toString())) },
+                                            onDelete = { deleteId = row.id },
+                                            onExport = {
+                                                exportId = row.id
+                                                exporter.launch(row.name + ".zip")
+                                            },
+                                            onShare = { viewModel.dispatch(BackupAction.Share(row.id)) },
+                                            onPrimary = {
+                                                if (pick) {
+                                                    viewModel.dispatch(BackupAction.Pick(row))
+                                                    navigator.pop()
+                                                } else {
+                                                    viewModel.createRoute(row.id)?.let { navigator.push(it) }
+                                                }
+                                            },
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -188,7 +196,7 @@ internal fun BackupPage(useBlur: Boolean, pick: Boolean, detailId: String? = nul
                 val row = state.rows.firstOrNull { it.id.toString() == detailId }
                 val manifest = state.detail?.takeIf { it.id.toString() == detailId }
                 if (manifest == null) {
-                    if (state.isLoadingDetail) {
+                    if (state.isLoadingDetail || state.selected?.toString() != detailId) {
                         item(key = "detail-loading") {
                             PageLoadingIndicator("正在读取备份详情…", Modifier.fillParentMaxSize())
                         }
@@ -217,22 +225,25 @@ internal fun BackupPage(useBlur: Boolean, pick: Boolean, detailId: String? = nul
                             item(key = "size") {
                                 BaseWidget(title = "备份大小", description = row?.sizeLabel.orEmpty())
                             }
+                            item(key = "date") { BaseWidget(title = "备份创建日期", description = state.detailDate) }
                         }
                     }
                     item(key = "detail-rom") {
                         SegmentedColumn(title = "ROM") {
-                            item(key = "rom") {
-                                BaseWidget(
-                                    title = manifest.settings.rom.name,
-                                    description = manifest.settings.rom.key,
-                                )
+                            if (manifest.romArchive != null && state.detailRomBytes > 0L) {
+                                item(key = "rom-size") {
+                                    BaseWidget(
+                                        title = "ROM 包大小",
+                                        description = me.kanadex.geometryos.rom.RomTexts.bytes(state.detailRomBytes),
+                                    )
+                                }
                             }
                             item(key = "rom-detail") {
                                 if (manifest.romArchive != null) {
                                     NavigationItemWidget(
                                         icon = AppIcons.Android,
                                         title = "ROM 详情",
-                                        description = "查看这个备份携带的 ROM",
+                                        description = state.detailRomTitle ?: "无法读取 ROM 信息",
                                         onClick = { navigator.push(Route.RomDetail("", backupId = manifest.id.toString())) },
                                     )
                                 } else {
@@ -267,28 +278,6 @@ internal fun BackupPage(useBlur: Boolean, pick: Boolean, detailId: String? = nul
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         )
     }
-    restoreId?.let { id ->
-        AlertDialog(
-            onDismissRequest = { restoreId = null },
-            title = { Text("恢复虚拟机") },
-            text = {
-                OutlinedTextField(
-                    value = restoreName,
-                    onValueChange = { restoreName = it },
-                    label = { Text("名称") },
-                    singleLine = true,
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    restoreId = null
-                    viewModel.dispatch(BackupAction.Restore(id, restoreName))
-                }) { Text("恢复") }
-            },
-            dismissButton = { TextButton(onClick = { restoreId = null }) { Text("取消") } },
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        )
-    }
 }
 
 /**
@@ -299,6 +288,8 @@ internal fun BackupPage(useBlur: Boolean, pick: Boolean, detailId: String? = nul
 private fun BackupRow(
     row: BackupLibrary.Row,
     pickMode: Boolean,
+    selected: Boolean,
+    summary: String,
     onOpen: () -> Unit,
     onDelete: () -> Unit,
     onExport: () -> Unit,
@@ -310,21 +301,29 @@ private fun BackupRow(
             modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 12.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text(
-                text = row.name,
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (row.romName.isNotBlank()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Text(
-                    text = row.romName,
+                    text = row.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (selected) {
+                    Icon(AppIcons.Check, contentDescription = "已选中", tint = MaterialTheme.colorScheme.primary)
+                }
+            }
+            Text(
+                    text = summary,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+                overflow = TextOverflow.Ellipsis,
+            )
             Text(
                 text = row.sizeLabel,
                 style = MaterialTheme.typography.bodySmall,
@@ -356,8 +355,10 @@ private fun BackupRow(
                 Icon(AppIcons.Share, contentDescription = "分享这个备份")
             }
             Spacer(modifier = Modifier.weight(1f))
-            TextButton(onClick = onPrimary) {
-                Text(if (pickMode) "选择" else "恢复")
+            TextButton(onClick = onPrimary, enabled = !selected) {
+                Text(if (pickMode) {
+                    if (selected) me.kanadex.geometryos.rom.RomTexts.PICKED_ACTION else me.kanadex.geometryos.rom.RomTexts.PICK_ACTION
+                } else "恢复")
             }
         }
     }

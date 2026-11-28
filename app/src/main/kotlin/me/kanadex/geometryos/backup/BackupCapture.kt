@@ -99,14 +99,21 @@ internal class BackupCapture(context: Context) {
                 var lastPhase: BackupArchive.Phase? = null
                 var lastTime = 0L
                 var lastFiles = -1
+                var lastPublish = 0L
+                // 归档按 64 KB 回调进度；这里再按 250ms 节流，避免每块都触发一次状态更新与重组。
                 val progress: (BackupArchive.Progress) -> Unit = { value ->
                     val now = System.nanoTime()
-                    if (value.phase != lastPhase || now - lastTime >= 1_000_000_000L ||
-                        (value.files == value.totalFiles && value.files != lastFiles)) {
+                    val terminal = value.totalFiles > 0 && value.files == value.totalFiles
+                    val record = value.phase != lastPhase || now - lastTime >= 1_000_000_000L ||
+                        (terminal && value.files != lastFiles)
+                    if (record) {
                         events += "phase=" + value.phase + " files=" + value.files + "/" + value.totalFiles + " bytes=" + value.bytes
                         lastPhase = value.phase
                         lastTime = now
                         lastFiles = value.files
+                    }
+                    if (record || terminal || now - lastPublish >= 250_000_000L) {
+                        lastPublish = now
                         publish(value)
                     }
                 }

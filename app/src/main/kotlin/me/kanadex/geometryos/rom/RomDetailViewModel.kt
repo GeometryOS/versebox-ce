@@ -31,7 +31,7 @@ data class RomDetailState(
     val confirm: RomConfirm? = null,
     val notice: RomNotice? = null,
     val message: String? = null,
-    val createdVmId: String? = null,
+    val createRoute: io.a10vm.ui.navigation.Route.CreateVm? = null,
     val pickedKey: String? = null,
 )
 
@@ -45,7 +45,7 @@ sealed interface RomDetailAction {
     data object Dismiss : RomDetailAction
     data object Primary : RomDetailAction
     data object ConsumeMessage : RomDetailAction
-    data object ConsumeCreated : RomDetailAction
+    data object ConsumeCreateRequest : RomDetailAction
     data object ConsumePicked : RomDetailAction
     data object DismissNotice : RomDetailAction
 }
@@ -68,9 +68,11 @@ class RomDetailViewModel(
                 val loaded = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                     val task = kotlinx.coroutines.currentCoroutineContext()
                     runCatching {
-                        me.kanadex.geometryos.backup.BackupLibrary.get(context)
+                        val embedded = me.kanadex.geometryos.backup.BackupLibrary.get(context)
                             .readEmbeddedRom(java.util.UUID.fromString(backupId)) { task.ensureActive() }
-                            .toRow(RomSource.Imported, RomState.Pending)
+                        embedded.properties.toRow(
+                            RomSource.Imported, RomState.Pending, archiveBytes = embedded.bytes,
+                        )
                     }
                 }
                 val row = loaded.getOrNull()
@@ -93,7 +95,7 @@ class RomDetailViewModel(
                     confirm = list.confirm,
                     notice = list.notice,
                     message = list.message,
-                    createdVmId = list.createdVmId,
+                    createRoute = list.createRoute,
                     pickedKey = list.pickedKey,
                 )
             }
@@ -119,7 +121,7 @@ class RomDetailViewModel(
                 if (mode == RomListMode.Manage) RomListAction.Create(rowId) else RomListAction.Pick(rowId),
             )
             RomDetailAction.ConsumeMessage -> operations.dispatch(RomListAction.ConsumeMessage)
-            RomDetailAction.ConsumeCreated -> operations.dispatch(RomListAction.ConsumeCreated)
+            RomDetailAction.ConsumeCreateRequest -> operations.dispatch(RomListAction.ConsumeCreateRequest)
             RomDetailAction.ConsumePicked -> operations.dispatch(RomListAction.ConsumePicked)
             RomDetailAction.DismissNotice -> operations.dispatch(RomListAction.DismissNotice)
         }

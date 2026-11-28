@@ -133,7 +133,7 @@ fun Material3MainCompactLayout(
                     modifier = Modifier.padding(end = 16.dp),
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
                     contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                    onClick = { navigator.push(Route.CreateVm) },
+                    onClick = { navigator.push(Route.CreateVm()) },
                 ) {
                     Icon(imageVector = AppIcons.Add, contentDescription = "新建虚拟机")
                 }

@@ -40,7 +40,9 @@ sealed interface Route : NavKey {
     data object ProcessLimit : Route
 
     @Serializable
-    data object CreateVm : Route
+    data class CreateVm(val romRowId: String? = null, val backupId: String? = null) : Route {
+        init { require(romRowId == null || backupId == null) }
+    }
 
     @Serializable
     data class BackupList(val pick: Boolean = false, val detailId: String? = null) : Route

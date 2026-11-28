@@ -193,7 +193,7 @@ fun MiuixMainCompactLayout(
                         MiuixTheme.colorScheme.background
                     },
                     shadowElevation = 2.dp,
-                    onClick = { navigator.push(Route.CreateVm) },
+                    onClick = { navigator.push(Route.CreateVm()) },
                 ) {
                     Icon(
                         imageVector = AppIcons.Add,
@@ -350,7 +350,7 @@ private fun MiuixMainWideContent(
                         MiuixTheme.colorScheme.background
                     },
                     shadowElevation = 2.dp,
-                    onClick = { navigator.push(Route.CreateVm) },
+                    onClick = { navigator.push(Route.CreateVm()) },
                 ) {
                     Icon(
                         imageVector = AppIcons.Add,

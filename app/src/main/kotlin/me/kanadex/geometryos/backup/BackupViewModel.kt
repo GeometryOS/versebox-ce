@@ -20,6 +20,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.kanadex.geometryos.rom.RomRepository
+import me.kanadex.geometryos.rom.toRow
+import me.kanadex.geometryos.shared.BackupDateGrouping
+import java.time.ZoneId
 
 /*
  * This ViewModel coordinates the backup library and navigation continuations shared by both UIs.
@@ -30,6 +33,11 @@ internal val LocalBackup = staticCompositionLocalOf<BackupViewModel> { error("Ba
 
 internal data class BackupState(
     val rows: List<BackupLibrary.Row> = emptyList(),
+    val groups: List<Pair<BackupDateGrouping.Group, List<BackupLibrary.Row>>> = emptyList(),
+    val summaries: Map<UUID, String> = emptyMap(),
+    val detailDate: String = "未知",
+    val detailRomTitle: String? = null,
+    val detailRomBytes: Long = 0L,
     val selected: UUID? = null,
     val detail: BackupManifest? = null,
     val name: String = "",
@@ -45,7 +53,8 @@ internal data class BackupState(
     val createdBackup: UUID? = null,
     val pickedBackup: BackupLibrary.Row? = null,
 ) {
-    val countLabel get() = if (isLoading) null else rows.size.toString() + " 个备份"
+    val isEmpty get() = !isLoading && rows.isEmpty() && error == null
+    val backupCountSummary: String get() = if (isLoading) "" else "${rows.size} 个备份"
 
     /**
      * 进度弹窗的唯一文案来源：归档阶段按 phase 取名并带条目计数，
@@ -56,11 +65,17 @@ internal data class BackupState(
         if (current != null) {
             val label = when (current.phase) {
                 BackupArchive.Phase.Write -> "正在写入备份包"
+                BackupArchive.Phase.WriteRom -> "正在写入 ROM 原包"
                 BackupArchive.Phase.Verify -> "正在校验备份包"
                 BackupArchive.Phase.Restore -> "正在恢复虚拟机文件"
                 BackupArchive.Phase.ReadRom -> "正在读取 ROM 原包"
             }
-            return if (current.totalFiles > 0) label + " " + current.files + "/" + current.totalFiles else label
+            return when {
+                current.totalBytes > 0L -> label + " " + me.kanadex.geometryos.rom.RomTexts.bytes(current.bytes) +
+                    " / " + me.kanadex.geometryos.rom.RomTexts.bytes(current.totalBytes)
+                current.totalFiles > 0 -> label + " " + current.files + "/" + current.totalFiles
+                else -> label
+            }
         }
         return stage.ifEmpty { "正在处理" }
     }
@@ -78,7 +93,6 @@ internal sealed interface BackupAction {
     data class SetName(val value: String) : BackupAction
     data class Export(val id: UUID, val uri: Uri?) : BackupAction
     data class Import(val uri: Uri?) : BackupAction
-    data class Restore(val id: UUID, val name: String? = null) : BackupAction
     data class RomImported(val result: Result<RomRepository.Outcome>) : BackupAction
     data object Cancel : BackupAction
     data object ConsumeMessage : BackupAction
@@ -104,12 +118,23 @@ internal class BackupViewModel(
         }
     }
 
+    fun createRoute(id: UUID): io.a10vm.ui.navigation.Route.CreateVm? =
+        _state.value.rows.firstOrNull { it.id == id }?.let {
+            io.a10vm.ui.navigation.Route.CreateVm(backupId = it.id.toString())
+        }
+
     fun dispatch(action: BackupAction) {
         when (action) {
             BackupAction.Refresh -> refresh()
             is BackupAction.Capture -> capture(action)
             BackupAction.ConsumeCaptured -> _state.update { it.copy(createdBackup = null) }
-            is BackupAction.Pick -> _state.update { it.copy(pickedBackup = action.row) }
+            is BackupAction.Pick -> {
+                if (action.row != null) {
+                    appState.createVmRomId.value = null
+                    appState.createVmRowId.value = null
+                }
+                _state.update { it.copy(pickedBackup = action.row) }
+            }
             is BackupAction.Delete -> manage("正在删除备份") { library.delete(action.id) }
             is BackupAction.Share -> manage("正在分享备份") { library.share(action.id) }
             BackupAction.DismissError -> _state.update { it.copy(error = null) }
@@ -117,7 +142,6 @@ internal class BackupViewModel(
             is BackupAction.SetName -> _state.update { it.copy(name = action.value) }
             is BackupAction.Export -> export(action.id, action.uri)
             is BackupAction.Import -> import(action.uri)
-            is BackupAction.Restore -> restore(action.id, action.name)
             is BackupAction.RomImported -> continueRestore(action)
             BackupAction.Cancel -> cancel()
             BackupAction.ConsumeMessage -> _state.update { it.copy(message = null) }
@@ -149,7 +173,10 @@ internal class BackupViewModel(
                 _state.update { state -> state.copy(error = it.message ?: "无法读取备份列表") }
                 emptyList()
             }
-            _state.update { it.copy(rows = rows, isLoading = false) }
+            val groups = BackupDateGrouping.groupAndSort(rows, System.currentTimeMillis()) { it.createdAt }
+            val zone = ZoneId.systemDefault()
+            _state.update { it.copy(rows = rows, groups = groups, summaries = rows.associate { row -> row.id to row.summary(zone) },
+                pickedBackup = it.pickedBackup?.let { picked -> rows.firstOrNull { row -> row.id == picked.id } }, isLoading = false) }
         }
     }
 
@@ -157,8 +184,17 @@ internal class BackupViewModel(
         _state.update { it.copy(selected = id, detail = null, isLoadingDetail = id != null) }
         if (id == null) return
         scope.launch(Dispatchers.IO) {
-            val detail = runCatching { BackupArchive.readManifest(library.archive(id)) }.getOrNull()
-            _state.update { if (it.selected == id) it.copy(detail = detail, isLoadingDetail = false) else it }
+            val detail = runCatching { BackupArchive.readHeader(library.archive(id)) }.getOrNull()
+            val rom = detail?.romArchive?.let {
+                runCatching { library.readEmbeddedRom(id) { ensureActive() } }.getOrNull()
+            }
+            val date = BackupDateGrouping.format(detail?.createdAtMillis, ZoneId.systemDefault()).ifEmpty { "未知" }
+            val title = rom?.properties?.let { me.kanadex.geometryos.rom.RomTexts.titleWithVersion(
+                it.toRow(me.kanadex.geometryos.rom.RomSource.Imported, me.kanadex.geometryos.rom.RomState.Pending,
+                    archiveBytes = rom.bytes),
+            ) }
+            _state.update { if (it.selected == id) it.copy(detail = detail, isLoadingDetail = false,
+                detailDate = date, detailRomTitle = title, detailRomBytes = rom?.bytes ?: 0L) else it }
         }
     }
 
@@ -200,12 +236,12 @@ internal class BackupViewModel(
                     { text -> _state.update { it.copy(stage = text) } },
                 )
             }
-                .onSuccess { id -> _state.update { it.copy(working = false, selected = id, message = "备份已导入") }; refresh() }
+                .onSuccess { _state.update { it.copy(working = false, message = "备份已导入") }; refresh() }
                 .onFailure { _state.update { it.copy(working = false, error = it.message ?: "导入备份失败") } }
         }
     }
 
-    private fun restore(id: UUID, name: String?) {
+    internal fun restoreFromCreate(id: UUID, name: String?) {
         if (_state.value.working || prepared != null) return
         val token = ++generation
         _state.update { it.copy(working = true, stage = "正在读取备份清单", progress = null, error = null, selected = id) }

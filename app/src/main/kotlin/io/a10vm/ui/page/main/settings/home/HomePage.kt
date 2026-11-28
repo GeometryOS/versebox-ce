@@ -160,7 +160,7 @@ fun HomePage(
                 SegmentedColumn {
                     item {
                         io.a10vm.ui.page.main.widget.setting.NavigationItemWidget(icon = io.a10vm.ui.icons.AppIcons.Save,
-                            title = "备份管理", description = backupState.countLabel.orEmpty(),
+                            title = "备份管理", description = backupState.backupCountSummary.orEmpty(),
                             onClick = { navigator.push(Route.BackupList()) })
                     }
                 }

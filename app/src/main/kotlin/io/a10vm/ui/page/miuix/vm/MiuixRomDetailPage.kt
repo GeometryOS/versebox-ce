@@ -59,10 +59,10 @@ fun MiuixRomDetailPage(rowId: String, mode: RomListMode, useBlur: Boolean, backu
         viewModel.dispatch(RomDetailAction.ConsumePicked)
         navigator.pop()
     }
-    LaunchedEffect(state.createdVmId) {
-        val id = state.createdVmId ?: return@LaunchedEffect
-        viewModel.dispatch(RomDetailAction.ConsumeCreated)
-        navigator.push(Route.VmManage(id))
+    LaunchedEffect(state.createRoute) {
+        val route = state.createRoute ?: return@LaunchedEffect
+        viewModel.dispatch(RomDetailAction.ConsumeCreateRequest)
+        navigator.push(route)
     }
     LaunchedEffect(state.message) {
         val message = state.message ?: return@LaunchedEffect

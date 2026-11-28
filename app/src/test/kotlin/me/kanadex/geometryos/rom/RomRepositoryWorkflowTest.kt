@@ -8,7 +8,12 @@ import java.io.File
 import java.nio.file.Files
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
+import io.a10vm.ui.verse.AppState
+import io.a10vm.ui.vm.CreateVmAction
+import io.a10vm.ui.vm.CreateVmViewModel
+import me.kanadex.geometryos.backup.BackupViewModel
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -173,6 +178,88 @@ class RomRepositoryWorkflowTest {
         assertTrue(registry.setRomId(device.id, imported.row.key, payloadSha, imported.row.source.name))
         assertEquals(revision, repository.revision.value)
         assertEquals(romDir.canonicalFile, resolve()?.romRoot?.canonicalFile)
+    }
+
+    @Test
+    fun backupDetailReportsMeasuredRomSize() {
+        val context = RuntimeEnvironment.getApplication()
+        val work = Files.createTempDirectory(context.cacheDir.toPath(), "rom-size-").toFile()
+        org.robolectric.shadows.ShadowStatFs.registerStats(context.filesDir, 1_000_000, 1_000_000, 1_000_000)
+        val archive = createRomFixture(work, "measured size fixture")
+        val properties = RomPackage.read(archive)
+        val registry = VmRegistry.get(context)
+        val device = registry.create(properties.key, properties.payloadSha256, RomSource.Imported.name)
+        val root = registry.rootOf(device)
+        root.resolve("vm/rootfs/data/local/sentinel").apply { checkNotNull(parentFile).mkdirs(); writeText("keep") }
+        val settings = BackupVmSettings(device.name, "", BackupRomSelection(
+            properties.id, properties.romVersion, properties.payloadSha256, RomSource.Imported.name, properties.name,
+        ))
+        val staged = work.resolve("size.zip")
+        val manifest = BackupArchive.write(staged, root, settings, BackupClient(context.packageName, "test", 1), archive)
+        val library = BackupLibrary.get(context)
+        val id = library.publish(staged, manifest)
+        val embedded = library.readEmbeddedRom(id) {}
+        assertEquals(archive.length(), embedded.bytes)
+        assertEquals(properties.key, embedded.properties.key)
+
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val backup = BackupViewModel(context, AppState(context), scope)
+            backup.dispatch(me.kanadex.geometryos.backup.BackupAction.ShowDetail(id))
+            runBlocking {
+                withTimeout(15_000) {
+                    val detail = backup.state.first { !it.isLoadingDetail && it.detail != null }
+                    assertEquals(archive.length(), detail.detailRomBytes)
+                    assertTrue(checkNotNull(detail.detailRomTitle).contains(properties.romVersion))
+                    assertTrue(detail.detailDate.isNotBlank())
+                }
+            }
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun romManagementPreselectsExactRowAndCreatesOnlyAfterConfirmation() {
+        val context = RuntimeEnvironment.getApplication()
+        val work = Files.createTempDirectory(context.cacheDir.toPath(), "create-from-rom-").toFile()
+        org.robolectric.shadows.ShadowStatFs.registerStats(context.filesDir, 1_000_000, 1_000_000, 1_000_000)
+        val repository = RomRepository.get(context)
+        val row = repository.importFromUri(Uri.fromFile(createRomFixture(work, "create fixture"))) {}.row
+        val registry = VmRegistry.get(context)
+        val name = row.displayName + " 虚拟机"
+        val source = registry.create(row.key, row.payloadSha256, row.source.name, row.displayName)
+        assertEquals(name, source.name)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val app = AppState(context)
+            val backup = BackupViewModel(context, app, scope)
+            val roms = RomListViewModel(context, app, scope, RomListMode.Manage)
+            runBlocking {
+                withTimeout(15_000) {
+                    roms.state.first { state -> state.rows.any { it.rowId == row.rowId } }
+                    roms.dispatch(RomListAction.Create(row.rowId))
+                    val route = checkNotNull(roms.state.first { it.createRoute != null }.createRoute)
+                    assertEquals(row.rowId, route.romRowId)
+                    val form = CreateVmViewModel(app, scope, backup, route)
+                    form.state.first { it.rowId == row.rowId }
+                    assertEquals(listOf(source), registry.list())
+                    form.dispatch(CreateVmAction.SetName(name))
+                    form.dispatch(CreateVmAction.Create)
+                    val result = form.state.first { it.createdId != null || it.error != null }
+                    val created = checkNotNull(registry.find(result.createdId)) { result.error.orEmpty() }
+                    assertEquals("Android 15 Fixtur 虚拟机(1)", created.name)
+                    assertEquals(row.key, created.romId)
+                    assertEquals(row.payloadSha256, created.romPayload)
+                    assertEquals(row.source.name, created.romSource)
+                    RecordCollector.awaitOperationArchives(created.id)
+                    val record = RecordStore.get(context).query(RecordFilter(vmId = created.id)).single { it.kind == RecordKind.CREATE_VM }
+                    assertTrue(RecordArchive.readText(context, record, "operation.log").contains("虚拟机名称重复"))
+                }
+            }
+        } finally {
+            scope.cancel()
+        }
     }
 
     @Test

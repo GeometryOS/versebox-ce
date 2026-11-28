@@ -127,7 +127,11 @@ internal class BackupRestore(context: Context) {
             checkActive()
             onStage("正在登记新虚拟机")
             events += "正在登记新虚拟机"
-            val device = registry.commitRestored(source.copy(name = name ?: source.name, rom = binding), prepared.tree)
+            val device = registry.commitRestored(
+                source.copy(name = name?.ifBlank { source.name } ?: source.name, rom = binding),
+                prepared.tree,
+                events::add,
+            )
             events += "新实例设置写入并读回成功 id=" + device.id
             record(manifest.id, manifest, prepared.startedAt, events, device, null)
             return device

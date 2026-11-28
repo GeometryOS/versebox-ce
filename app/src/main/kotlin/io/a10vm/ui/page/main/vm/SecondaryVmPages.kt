@@ -89,11 +89,11 @@ import io.a10vm.ui.page.main.widget.setting.BaseWidget
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun CreateVmPage(useBlur: Boolean) {
+fun CreateVmPage(useBlur: Boolean, route: Route.CreateVm) {
     val navigator = LocalNavigator.current
     val appState = LocalAppState.current
     val focusManager = LocalFocusManager.current
-    val viewModel = rememberCreateVmViewModel()
+    val viewModel = rememberCreateVmViewModel(route)
     val state by viewModel.state.collectAsStateWithLifecycle()
 
     // 选中项的唯一真相是 AppState.createVmRomId，由 CreateVmViewModel 自己订阅；

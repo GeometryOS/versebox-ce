@@ -221,9 +221,9 @@ fun VerseBoxNavContainer(uiState: ThemeState, mainContent: @Composable () -> Uni
                 }
             }
             // 表单类页面：编辑中误触侧滑会把输入丢掉，所以关掉侧滑返回（InstallerX 对 EditConfig 同样处理）。
-            entry<Route.CreateVm>(swipeDismiss = NavSwipeDirection.None) {
+            entry<Route.CreateVm>(swipeDismiss = NavSwipeDirection.None) { route ->
                 VerseBoxNavEntry(interceptPredictiveBack, onBack) {
-                    if (uiState.useMiuix) MiuixCreateVmPage(useBlur) else CreateVmPage(useBlur)
+                    if (uiState.useMiuix) MiuixCreateVmPage(useBlur, route) else CreateVmPage(useBlur, route)
                 }
             }
             entry<Route.VmManage>(swipeDismiss = swipeBackDirection) { key ->

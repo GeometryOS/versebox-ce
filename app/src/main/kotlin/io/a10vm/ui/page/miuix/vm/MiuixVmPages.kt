@@ -86,10 +86,10 @@ import top.yukonga.miuix.kmp.window.WindowDialog
  * - 输入中的侧滑返回会被未保存确认拦住（路由层已关侧滑，这里再兜一层返回键）。
  */
 @Composable
-fun MiuixCreateVmPage(useBlur: Boolean) {
+fun MiuixCreateVmPage(useBlur: Boolean, route: Route.CreateVm) {
     val navigator = LocalNavigator.current
     val appState = LocalAppState.current
-    val viewModel = rememberCreateVmViewModel()
+    val viewModel = rememberCreateVmViewModel(route)
     val state by viewModel.state.collectAsStateWithLifecycle()
 
     // 选中项的唯一真相是 AppState.createVmRomId，由 CreateVmViewModel 自己订阅；

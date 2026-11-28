@@ -54,7 +54,7 @@ data class RomListState(
     val confirm: RomConfirm? = null,
     // 只有一个按钮的告知。检查出问题但原包不在时用它，不给用户一个假的取消
     val notice: RomNotice? = null,
-    val createdVmId: String? = null,
+    val createRoute: io.a10vm.ui.navigation.Route.CreateVm? = null,
     // 要定位并闪烁的那一行
     val highlightKey: String? = null,
     // 每次定位加一，同一个 key 连着定位两次也要再闪
@@ -121,7 +121,7 @@ sealed interface RomListAction {
     data object DismissRepair : RomListAction
     data object DismissNotice : RomListAction
     data object ConsumeMessage : RomListAction
-    data object ConsumeCreated : RomListAction
+    data object ConsumeCreateRequest : RomListAction
 
     // 闪烁做完了，清掉高亮，免得下次进列表又闪
     data object ConsumeFocus : RomListAction
@@ -264,7 +264,7 @@ class RomListViewModel(
 
             RomListAction.ConsumePicked -> _state.update { it.copy(pickedKey = null) }
             RomListAction.ConsumeMessage -> _state.update { it.copy(message = null) }
-            RomListAction.ConsumeCreated -> _state.update { it.copy(createdVmId = null) }
+            RomListAction.ConsumeCreateRequest -> _state.update { it.copy(createRoute = null) }
             RomListAction.ConsumeFocus -> _state.update { it.copy(highlightKey = null) }
         }
     }
@@ -546,30 +546,10 @@ class RomListViewModel(
     }
 
     private fun create(rowId: String) {
-        if (_state.value.busy) return
-        val key = row(rowId)?.key ?: rowId
-        _state.update { it.copy(busy = true, busyText = "正在准备虚拟机…") }
-        scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    // 创建不解包。只有行内重新解包和启动时发现缺解包体，才会去解
-                    val row = lastRows.firstOrNull { it.rowId == rowId }
-                    // 建实例时把用的是哪一份一起写进去
-                    appState.create(key, row?.payloadSha256.orEmpty(), row?.source)
-                }
-            }
-            _state.update {
-                it.copy(
-                    busy = false,
-                    busyText = "",
-                    createdVmId = result.getOrNull()?.id,
-                    message = result.exceptionOrNull()?.message
-                        ?: if (result.getOrNull() == null) "创建失败，请检查存储空间" else null,
-                )
-            }
-            appState.refresh()
-            appState.refreshRoms()
-        }
+        if (mode != RomListMode.Manage || _state.value.busy) return
+        val selected = row(rowId) ?: return
+        if (!selected.isReady && (selected.placeholder || !selected.hasArchive)) return
+        _state.update { it.copy(createRoute = io.a10vm.ui.navigation.Route.CreateVm(romRowId = selected.rowId)) }
     }
 }
 

@@ -173,10 +173,10 @@ fun MiuixRomListPage(useBlur: Boolean, mode: RomListMode = RomListMode.Manage, r
     }
 
     // 管理模式下创建成功 → 进管理页（与虚拟机列表的「新建」同一个落点）。
-    LaunchedEffect(state.createdVmId) {
-        val id = state.createdVmId ?: return@LaunchedEffect
-        viewModel.dispatch(RomListAction.ConsumeCreated)
-        navigator.push(Route.VmManage(id))
+    LaunchedEffect(state.createRoute) {
+        val route = state.createRoute ?: return@LaunchedEffect
+        viewModel.dispatch(RomListAction.ConsumeCreateRequest)
+        navigator.push(route)
     }
 }
 

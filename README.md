@@ -10,7 +10,9 @@
   <a href="LICENSE"><img alt="自定义只读许可" src="https://img.shields.io/badge/%E8%AE%B8%E5%8F%AF-%E5%8F%AA%E8%AF%BB%E5%8F%82%E8%80%83-4D6BFE"></a>
 </p>
 
-VerseBox CE 是 VerseBox 的社区版宿主应用，面向安卓手机和平板。无需 root 即可在同一台设备上创建和管理多台虚拟机，各实例保有自己的应用、数据和显示设置。社区版与商业版的功能和构建流程有所不同。
+VerseBox CE 是一款好用的安卓虚拟机 app，并面向各种 Android9 以上的设备喵
+
+它无需 root 即可在同一台设备上创建和管理多台虚拟机，各实例保有自己的应用、数据和显示设置等
 
 ## 核心功能
 

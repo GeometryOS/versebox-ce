@@ -547,11 +547,16 @@ class AppState(private val context: Context) {
         romId: String,
         payloadSha256: String = "",
         source: me.kanadex.geometryos.rom.RomSource? = null,
+        romName: String = me.kanadex.geometryos.rom.RomKeys.idOf(romId),
+        requestedName: String = "",
     ): VmDevice? {
         val started = System.currentTimeMillis()
         val spec = specIndex[identityKey(romId, payloadSha256)] ?: specIndex[romId]
         // 身份从第一刻就写全：只写 romKey 的实例，之后每次启动都分不清用的是哪一份内容。
-        val result = runCatching { registry.create(romId, payloadSha256, source?.name.orEmpty()) }
+        val nameEvents = mutableListOf<String>()
+        val result = runCatching {
+            registry.create(romId, payloadSha256, source?.name.orEmpty(), romName, requestedName, nameEvents::add)
+        }
         val device = result.getOrNull()
         val failure = result.exceptionOrNull()?.message
         val detail = when {
@@ -569,7 +574,7 @@ class AppState(private val context: Context) {
             status = if (device != null) RecordStatus.SUCCESS else RecordStatus.FAILED,
             detail = detail,
             startedAt = started,
-            operationEvents = listOf("vm_instance注册表创建结果 ok=" + (device != null), "ROM身份保存 key=" + romId),
+            operationEvents = listOf("vm_instance注册表创建结果 ok=" + (device != null), "ROM身份保存 key=" + romId) + nameEvents,
             failure = result.exceptionOrNull(),
         )
         AuditBootstrap.emit(context, "vm_created", mapOf(

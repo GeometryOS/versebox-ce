@@ -211,10 +211,10 @@ fun RomListPage(useBlur: Boolean, mode: RomListMode = RomListMode.Manage, restor
         snackbarHostState.showSnackbar(message)
     }
 
-    LaunchedEffect(state.createdVmId) {
-        val id = state.createdVmId ?: return@LaunchedEffect
-        viewModel.dispatch(RomListAction.ConsumeCreated)
-        navigator.push(Route.VmManage(id))
+    LaunchedEffect(state.createRoute) {
+        val route = state.createRoute ?: return@LaunchedEffect
+        viewModel.dispatch(RomListAction.ConsumeCreateRequest)
+        navigator.push(route)
     }
 }
 

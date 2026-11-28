@@ -101,7 +101,7 @@ fun MiuixHomePage(
         }
 
         miuixSection {
-            BasicComponent(title = "备份管理", summary = backupState.countLabel,
+            BasicComponent(title = "备份管理", summary = backupState.backupCountSummary,
                 onClick = { navigator.push(Route.BackupList()) })
         }
 

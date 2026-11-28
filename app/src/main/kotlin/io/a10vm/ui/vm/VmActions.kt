@@ -100,7 +100,7 @@ object VmActions {
 
     /** 重命名失败 → 给用户看的一句话。类型来自 RenameResult，不靠字符串猜。 */
     fun renameMessage(result: RenameResult): String = when (result) {
-        is RenameResult.Renamed -> "已重命名为「" + result.device.name + "」"
+        is RenameResult.Renamed -> result.correctionMessage ?: "已重命名为「" + result.device.name + "」"
         RenameResult.EmptyName -> "名字不能为空"
         RenameResult.TooLong -> "名字最长 " + VmRegistry.MAX_NAME_LENGTH + " 个字"
         RenameResult.Duplicate -> "已经有同名的虚拟机了"
