@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="18 18 72 72" width="120" height="120">
+  <!-- Launcher foreground and colors with a rounded-square web mask. -->
+  <rect x="18.5" y="18.5" width="71" height="71" rx="14" fill="#FFFFFF" stroke="#4D6BFE" stroke-opacity=".18"/>
+  <g transform="translate(54 54) scale(2.3) translate(-12 -12)">
+    <g transform="translate(12 12) scale(1.1) translate(-12 -11.75)">
+      <path fill="#4D6BFE" fill-rule="evenodd" d="M8.5,3 H15.5 A3.5,3.5 0 0 1 19,6.5 V12.5 A3.5,3.5 0 0 1 15.5,16 H8.5 A3.5,3.5 0 0 1 5,12.5 V6.5 A3.5,3.5 0 0 1 8.5,3 Z M8.5,7.5 H10.5 V9.5 H8.5 Z M13.5,7.5 H15.5 V9.5 H13.5 Z"/>
+      <path fill="none" stroke="#4D6BFE" stroke-width="2" stroke-linecap="round" d="M4.5,19.5 L19.5,19.5"/>
+    </g>
+  </g>
+</svg>
